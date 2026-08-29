@@ -1,0 +1,101 @@
+rbi_class_code,rbi_class_name,manning_n,N,manning
+Waduk,Waduk,0.025,0.025,0.025
+Tambak,Tambak,0.03,0.03,0.03
+Sungai,Sungai,0.03,0.03,0.03
+Rawa,Rawa,0.08,0.08,0.08
+Pasir/Bukit Pasir Laut,Pasir/Bukit Pasir Laut,0.03,0.03,0.03
+Pasir/Bukit Pasir Darat,Pasir/Bukit Pasir Darat,0.03,0.03,0.03
+Kolam,Kolam,0.025,0.025,0.025
+Empang,Empang,0.025,0.025,0.025
+Danau/Situ,Danau/Situ,0.025,0.025,0.025
+Stasiun Pompa Bahan Bakar Umum,Stasiun Pompa Bahan Bakar Umum,0.08,0.08,0.08
+Kantor Televisi,Kantor Televisi,0.12,0.12,0.12
+Tanaman Campur,Tanaman Campur,0.055,0.055,0.055
+Semak Belukar,Semak Belukar,0.07,0.07,0.07
+Sawah,Sawah,0.04,0.04,0.04
+Perkebunan/Kebun,Perkebunan/Kebun,0.06,0.06,0.06
+Tegalan/Ladang,Tegalan/Ladang,0.045,0.045,0.045
+Hutan Bakau/Mangrove,Hutan Bakau/Mangrove,0.14,0.14,0.14
+Hutan Rimba,Hutan Rimba,0.12,0.12,0.12
+Padang Rumput,Padang Rumput,0.035,0.035,0.035
+Tanah Kosong/Gundul,Tanah Kosong/Gundul,0.03,0.03,0.03
+Taxiway,Taxiway,0.015,0.015,0.015
+Landas Pacu,Landas Pacu,0.015,0.015,0.015
+Dermaga,Dermaga,0.02,0.02,0.02
+Apron,Apron,0.015,0.015,0.015
+Rumah Sakit Umum,Rumah Sakit Umum,0.12,0.12,0.12
+Puskesmas/Puskesmas Pembantu,Puskesmas/Puskesmas Pembantu,0.12,0.12,0.12
+Masjid,Masjid,0.12,0.12,0.12
+Gereja,Gereja,0.12,0.12,0.12
+Pendidikan Tinggi,Pendidikan Tinggi,0.12,0.12,0.12
+Pendidikan Menengah Umum,Pendidikan Menengah Umum,0.12,0.12,0.12
+Pendidikan Dasar,Pendidikan Dasar,0.12,0.12,0.12
+Pendidikan Menengah Pertama,Pendidikan Menengah Pertama,0.12,0.12,0.12
+Pendidikan Khusus,Pendidikan Khusus,0.12,0.12,0.12
+Kantor Polisi,Kantor Polisi,0.12,0.12,0.12
+Kantor Kepala Desa,Kantor Kepala Desa,0.12,0.12,0.12
+Kantor Pemerintah Lainnya,Kantor Pemerintah Lainnya,0.12,0.12,0.12
+Kantor Camat,Kantor Camat,0.12,0.12,0.12
+Pusat Perdagangan Tradisional (Pasar Eceran/Grosir/Induk),Pusat Perdagangan Tradisional,0.12,0.12,0.12
+Gedung/Bangunan,Gedung/Bangunan,0.12,0.12,0.12
+Permukiman dan Tempat Kegiatan,Permukiman dan Tempat Kegiatan,0.12,0.12,0.12
+Hutan,Hutan,0.12,0.12,0.12
+Perkebunan,Perkebunan,0.06,0.06,0.06
+Vegetasi Non Budidaya Lainnya,Vegetasi Non Budidaya Lainnya,0.07,0.07,0.07
+Bandara,Bandara,0.05,0.05,0.05
+Gosong Sungai,Gosong Sungai,0.03,0.03,0.03
+Tanah Kosong,Tanah Kosong,0.03,0.03,0.03
+Rumput,Rumput,0.035,0.035,0.035
+Perkebunan Campuran,Perkebunan Campuran,0.06,0.06,0.06
+Bangunan Industri,Bangunan Industri,0.12,0.12,0.12
+Saluran Irigasi/Drainase,Saluran Irigasi/Drainase,0.03,0.03,0.03
+Pendidikan Anak Usia Dini,Pendidikan Anak Usia Dini,0.12,0.12,0.12
+Industri Bahan Pangan dan Makanan,Industri Bahan Pangan dan Makanan,0.12,0.12,0.12
+Pusat Bisnis dan Perdagangan Lainnya,Pusat Bisnis dan Perdagangan Lainnya,0.12,0.12,0.12
+Hutan Tanaman Industri,Hutan Tanaman Industri,0.1,0.1,0.1
+Stadion/Tribun/Bangunan Olah Raga,Stadion/Tribun/Bangunan Olah Raga,0.08,0.08,0.08
+Industri Sarana dan Bahan Perkantoran,Industri Sarana dan Bahan Perkantoran,0.12,0.12,0.12
+Pertambangan Batu Bara,Pertambangan Batu Bara,0.035,0.035,0.035
+PUSKESMAS,PUSKESMAS,0.12,0.12,0.12
+SARANAIBADAH,SARANAIBADAH,0.12,0.12,0.12
+Hutan Rawa/Gambut,Hutan Rawa/Gambut,0.12,0.12,0.12
+Hutan Rakyat/Tanaman Campur,Hutan Rakyat/Tanaman Campur,0.06,0.06,0.06
+Pariwisata/Rekreasi Pantai,Pariwisata/Rekreasi Pantai,0.035,0.035,0.035
+Pendidikan Keagamaan,Pendidikan Keagamaan,0.12,0.12,0.12
+Laut,Laut,0.025,0.025,0.025
+Pembangkit Listrik Tenaga Gas,Pembangkit Listrik Tenaga Gas,0.12,0.12,0.12
+Kantor PLN,Kantor PLN,0.12,0.12,0.12
+Kantor Lembaga Negara,Kantor Lembaga Negara,0.12,0.12,0.12
+Kantor DPRD,Kantor DPRD,0.12,0.12,0.12
+Kantor Gubernur,Kantor Gubernur,0.12,0.12,0.12
+Industri Manufaktur Lainnya,Industri Manufaktur Lainnya,0.12,0.12,0.12
+Industri Bahan Dasar Kimia,Industri Bahan Dasar Kimia,0.12,0.12,0.12
+Pusat Perdagangan dan Niaga Kota (Mal/Toserba),Pusat Perdagangan dan Niaga Kota,0.12,0.12,0.12
+Lapangan Sepakbola,Lapangan Sepakbola,0.035,0.035,0.035
+Vegetasi Budidaya Lainnya,Vegetasi Budidaya Lainnya,0.055,0.055,0.055
+Pusat Pergudangan/Terminal Peti Kemas/Cargo,Pusat Pergudangan/Cargo,0.08,0.08,0.08
+Lembaga Pemasyarakatan,Lembaga Pemasyarakatan,0.12,0.12,0.12
+Kantor Lurah,Kantor Lurah,0.12,0.12,0.12
+Pemakaman Umum,Pemakaman Umum,0.04,0.04,0.04
+Kolam Air Budidaya,Kolam Air Budidaya,0.025,0.025,0.025
+Gardu Induk Tegangan Ekstra Tinggi,Gardu Induk PLN,0.1,0.1,0.1
+Menara Telepon,Menara Telepon,0.1,0.1,0.1
+Terminal Bus/Angkutan Kendaraan Lainnya,Terminal Bus,0.06,0.06,0.06
+Pelabuhan Antar Pulau,Pelabuhan Antar Pulau,0.06,0.06,0.06
+Rumah Panti Asuhan Anak Yatim Piatu,Panti Asuhan,0.12,0.12,0.12
+Rumah Sakit Khusus,Rumah Sakit Khusus,0.12,0.12,0.12
+Pariwisata/Seni/Budaya/Olah Raga Lainnya,Fasilitas Rekreasi,0.08,0.08,0.08
+Instalasi TNI (AD/AL/AU),Instalasi TNI,0.12,0.12,0.12
+Kantor Bupati,Kantor Bupati,0.12,0.12,0.12
+Kantor Wali Kota,Kantor Wali Kota,0.12,0.12,0.12
+Kantor Bank,Kantor Bank,0.12,0.12,0.12
+Pembangkit Listrik Tenaga Air,Pembangkit Listrik Tenaga Air,0.1,0.1,0.1
+Makam,Makam,0.04,0.04,0.04
+Pengolahan Bahan Bakar Gas,Pengolahan Bahan Bakar Gas,0.12,0.12,0.12
+Tagalan/Ladang,Tagalan/Ladang,0.045,0.045,0.045
+ARENAOLAHRAGA,ARENAOLAHRAGA,0.08,0.08,0.08
+Vihara,Vihara,0.12,0.12,0.12
+Kantor PAM,Kantor PAM,0.12,0.12,0.12
+Pendidikan Menengah Kejuruan,Pendidikan Menengah Kejuruan,0.12,0.12,0.12
+Lapangan,Lapangan,0.035,0.035,0.035
+Hutan lahan tinggi primer kerapatan tinggi,Hutan Primer Tinggi,0.14,0.14,0.14

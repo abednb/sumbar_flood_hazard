@@ -1,0 +1,68 @@
+# HydroMT Data Catalog for Standalone SFINCS Modeling (HydroMT v0.10.x)
+# Author: Sumatra Barat Flood Hazard Modeling Team
+
+fabdem_sumbar:
+  path: data/fabdem_reprojected.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 32747
+
+rbi_river_sumbar:
+  path: data/rivers.gpkg
+  data_type: GeoDataFrame
+  driver: vector
+  crs: 32747
+
+rbi_landcover_sumbar:
+  path: data/landcover_100m.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 32747
+
+soil_infiltration_sumbar:
+  path: data/soil_infiltration_100m.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 32747
+
+das_clusters:
+  path: data/das_clusters.gpkg
+  data_type: GeoDataFrame
+  driver: vector
+  crs: 32747
+
+rainfall_rp2:
+  path: data/rainfall/rainfall_rp2_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747
+
+rainfall_rp5:
+  path: data/rainfall/rainfall_rp5_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747
+
+rainfall_rp10:
+  path: data/rainfall/rainfall_rp10_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747
+
+rainfall_rp25:
+  path: data/rainfall/rainfall_rp25_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747
+
+rainfall_rp50:
+  path: data/rainfall/rainfall_rp50_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747
+
+rainfall_rp100:
+  path: data/rainfall/rainfall_rp100_hourly.nc
+  data_type: RasterDataset
+  driver: netcdf
+  crs: 32747

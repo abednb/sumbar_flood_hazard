@@ -1,0 +1,41 @@
+# Environments & Python Virtualenvs
+env*/
+.venv/
+__pycache__/
+*.pyc
+
+# Heavy Spatial Datasets (Google Drive storage)
+data_raw/
+data/*.tif
+data/**/*.tif
+data/*.gpkg
+data/**/*.gpkg
+data/*.nc
+data/**/*.nc
+data/*.aux.xml
+data/**/*.aux.xml
+data/das_clusters/
+data/hillshade_clusters/
+data/modified_das_cluster/
+data/rainfall/
+
+# Model Builds & Simulation Outputs
+models_sfincs_standalone/
+outputs_standalone/
+models_sfincs/
+models_wflow/
+outputs/
+qc_reports/
+
+# Binaries, Temp, & OS Metadata
+bin/
+temp/
+.DS_Store
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Keep directory placeholders
+!data/.gitkeep
+!models_sfincs_standalone/.gitkeep
+!outputs_standalone/.gitkeep
+
