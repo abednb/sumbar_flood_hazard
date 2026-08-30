@@ -361,9 +361,11 @@ def build_sfincs_standalone(
     # 4. Build SFINCS model using HydroMT CLI
     hydromt_exe = Path(sys.executable).parent / "hydromt.exe"
     if not hydromt_exe.exists():
+        hydromt_exe = Path(sys.executable).parent / "hydromt"
+    if not hydromt_exe.exists():
         hydromt_exe = Path("env-sfincs/Scripts/hydromt.exe")
     if not hydromt_exe.exists():
-        hydromt_exe = "hydromt"
+        hydromt_exe = shutil.which("hydromt") or "hydromt"
         
     region_arg = f'{{"geom": "{temp_das_path.as_posix()}"}}'
     cmd = [
@@ -501,8 +503,11 @@ def run_sfincs_model(
     candidates = [
         sfincs_exe,
         os.environ.get("SFINCS_PATH"),
+        str(Path("bin/sfincs").resolve()),
         str(Path("bin/sfincs.exe").resolve()),
         str(Path("env-sfincs/Scripts/sfincs.exe").resolve()),
+        "/usr/local/bin/sfincs",
+        "sfincs",
         "sfincs.exe",
     ]
     resolved_exe = None
