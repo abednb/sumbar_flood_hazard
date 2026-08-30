@@ -167,7 +167,8 @@ def prepare_cluster_clipped_rasters(
     Prevents massive in-memory memory allocation errors (OOM) and builds a universal data catalog.
     """
     root_dir = Path(".").resolve()
-    chip_dir = (root_dir / "data" / "das_clusters" / "chips" / das_id).resolve()
+    # Always write temporary raster chips to local fast SSD (avoids Google Drive FUSE I/O block errors)
+    chip_dir = (root_dir / "temp" / "chips" / das_id).resolve()
     chip_dir.mkdir(parents=True, exist_ok=True)
     
     if source_dem is None or not source_dem.exists():
