@@ -28,15 +28,22 @@ if str(script_dir) not in sys.path:
 
 from perka_bnpb_classification import classify_perka_bnpb
 
-# Fix PROJ and GDAL paths dynamically for Windows virtual environment
-site_packages = Path(sys.prefix) / "Lib" / "site-packages"
-proj_dir = (site_packages / "rasterio" / "proj_data").resolve()
-gdal_dir = (site_packages / "rasterio" / "gdal_data").resolve()
+# Fix PROJ and GDAL paths dynamically for active Python environment (Windows/Linux/Colab)
+try:
+    rasterio_pkg = Path(rasterio.__file__).parent
+    proj_dir = (rasterio_pkg / "proj_data").resolve()
+    gdal_dir = (rasterio_pkg / "gdal_data").resolve()
+except Exception:
+    proj_dir = Path("nonexistent")
+    gdal_dir = Path("nonexistent")
 
 if proj_dir.exists():
     os.environ["PROJ_DATA"] = str(proj_dir)
     os.environ["PROJ_LIB"] = str(proj_dir)
-    pyproj.datadir.set_data_dir(str(proj_dir))
+    try:
+        pyproj.datadir.set_data_dir(str(proj_dir))
+    except Exception:
+        pass
 if gdal_dir.exists():
     os.environ["GDAL_DATA"] = str(gdal_dir)
 
@@ -381,10 +388,27 @@ def build_sfincs_standalone(
         
     print(f"[{das_id}] Building standalone SFINCS base model at {model_root}...")
     env = os.environ.copy()
-    env["PROJ_DATA"] = str(proj_dir)
-    env["PROJ_LIB"] = str(proj_dir)
-    env["GDAL_DATA"] = str(gdal_dir)
-    subprocess.run(cmd, check=True, env=env)
+    if proj_dir.exists():
+        env["PROJ_DATA"] = str(proj_dir)
+        env["PROJ_LIB"] = str(proj_dir)
+    if gdal_dir.exists():
+        env["GDAL_DATA"] = str(gdal_dir)
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        env=env,
+    )
+    for line in iter(proc.stdout.readline, ""):
+        print(line, end="", flush=True)
+    proc.stdout.close()
+    retcode = proc.wait()
+    if retcode != 0:
+        raise subprocess.CalledProcessError(retcode, cmd)
     
     # 5. Optional Infrastructure / Gauges Placeholders
     if bws_structures_gpkg and os.path.exists(bws_structures_gpkg):
