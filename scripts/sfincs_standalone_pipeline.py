@@ -554,13 +554,28 @@ def run_sfincs_model(
 
     if resolved_exe:
         cmd = [resolved_exe]
-    else:
+    elif shutil.which("udocker"):
+        abs_path = os.path.abspath(str(model_dir))
+        cmd = [
+            "udocker", "--allow-root", "run",
+            "--rm",
+            "-v", f"{abs_path}:/data",
+            "deltares/sfincs-cpu:latest"
+        ]
+    elif shutil.which("docker"):
         abs_path = os.path.abspath(str(model_dir))
         cmd = [
             "docker", "run", "--rm",
             "-v", f"{abs_path}:/data",
             "deltares/sfincs-cpu:latest"
         ]
+    else:
+        raise FileNotFoundError(
+            "No SFINCS simulation solver found!\n"
+            "On Google Colab, please install udocker using:\n"
+            "  !pip install -q udocker && udocker --allow-root install && udocker --allow-root pull deltares/sfincs-cpu:latest\n"
+            "or place the native Linux sfincs binary inside 'bin/sfincs'."
+        )
 
     with open(log_path, "w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
