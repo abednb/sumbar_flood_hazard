@@ -702,14 +702,30 @@ def postprocess_sfincs_hazard(
     
     zsmax = sf.results["zsmax"].max(dim="timemax")
     
-    # Subgrid high-resolution topography
-    dep_subgrid_path = model_dir / "subgrid" / "dep_subgrid.tif"
-    if not dep_subgrid_path.exists():
-        dep_subgrid_path = Path(base_model_dir) / das_id / "subgrid" / "dep_subgrid.tif"
-    if not dep_subgrid_path.exists():
-        raise FileNotFoundError(f"Subgrid topography not found at {dep_subgrid_path}")
+    # Subgrid high-resolution topography lookup with robust fallbacks
+    dep_candidates = [
+        model_dir / "subgrid" / "dep_subgrid.tif",
+        Path(base_model_dir) / das_id / "subgrid" / "dep_subgrid.tif",
+        Path("temp/chips") / das_id / "dem_chip.tif",
+        Path("data/das_clusters/chips") / das_id / "dem_chip.tif",
+        Path("data/das_clusters/chips") / das_id / "fabdem_chip.tif",
+        Path("temp/chips") / das_id / "fabdem_chip.tif",
+        find_elevation_dem_path(),
+    ]
+    dep_path = None
+    for cand in dep_candidates:
+        if cand and Path(cand).exists():
+            dep_path = Path(cand)
+            break
+            
+    if not dep_path:
+        raise FileNotFoundError(
+            f"High-resolution topography not found for {das_id}.\n"
+            f"Searched in: {[str(c) for c in dep_candidates]}"
+        )
         
-    dep = hydromt.open_raster(str(dep_subgrid_path.resolve()))
+    print(f"[{das_id}][{rp}] Using elevation raster from: {dep_path}")
+    dep = hydromt.open_raster(str(dep_path.resolve()))
     
     out_dir = Path(output_maps_dir) / das_id / rp
     out_dir.mkdir(parents=True, exist_ok=True)

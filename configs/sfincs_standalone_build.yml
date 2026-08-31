@@ -30,7 +30,7 @@ setup_subgrid:
     - lulc: rbi_landcover_sumbar
       reclass_table: lookup_tables/manning_lookup.csv
   nr_subgrid_pixels: 4      # 4 x 10m = 40m subgrid resolution (valid multiple of 2)
-  write_dep_tif: false
+  write_dep_tif: true
   write_man_tif: false
 
 # --- River Hydrography & Synthetic Channel Inflows ---
