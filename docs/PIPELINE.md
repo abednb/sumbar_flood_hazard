@@ -20,8 +20,8 @@ This repository implements a **Standalone 2D Hydrodynamic Flood Hazard Modeling 
    Utilizes a 40 m regular hydrodynamic flux grid coupled with 10 m high-resolution **FABDEM** subgrid elevation tables. Water levels are computed efficiently on the 40 m grid and downscaled precisely to 10 m terrain features (roads, levees, stream channels).
 3. **Calibrated Soil Infiltration ($q_{\text{inf}}$)**:
    Infiltration loss is parameterized using a 2D physical matrix coupling official **Kementerian Pertanian Soil Texture** with **BIG RBI Land Cover**, eliminating excessive infiltration loss (*sponge effect*) over flat lowland alluvial plains.
-4. **Perka BNPB No. 2/2012 Disaster Hazard Standards**:
-   Automated post-processing downscales maximum water depth to 10 m resolution and classifies flood hazard into official BNPB disaster hazard tiers (*Rendah, Sedang, Tinggi*) along with continuous Flood Hazard Index (FHI) rasters.
+4. **Seamless Post-Processing & BNPB Disaster Hazard Standards**:
+   Automated post-processing applies **Morphological Closing** (bridging 40 m grid discretization gaps), **Dual-MMU Filtering** (filling internal dry voids $\le 50\text{ px}$ and pruning isolated noise $< 50\text{ px}$), **Boundary Anti-Aliasing** (signed distance transform to remove 90° jagged pixel staircases), and **Topographic Depth Inpainting ($z_s - z_{\text{DEM}}$)** with field calibration support. Classifies flood hazard into official BNPB disaster hazard tiers (*Rendah, Sedang, Tinggi*) along with continuous Fuzzy Large Flood Hazard Index (FHI) rasters.
 
 ---
 
@@ -114,6 +114,15 @@ Flood hazard classification follows **Peraturan Kepala BNPB No. 02 Tahun 2012 (P
 
 ### 5.2 Continuous Flood Hazard Index (FHI):
 $$\text{FHI} = \min\left(1.0, \frac{h}{3.0}\right)$$
+
+### 5.3 Seamless Anti-Aliasing, Dual-MMU & Field Calibration
+To eliminate discretization artifacts caused by downscaling 40 m numerical cells onto 10 m micro-topography, the post-processing engine executes an automated 5-stage geospatial filter:
+1. **Morphological Closing**: Disk kernel ($r=3\text{ px} = 30\text{ m}$) bridges the 40 m discretization gaps along narrow river channels and valleys without expanding into dry hillsides.
+2. **Dual-MMU Hole-Filling (Inverse Sieve)**: Fills enclosed dry voids and internal non-flood holes ($\le 50\text{ px} = 0.5\text{ ha}$) trapped inside the flood extent.
+3. **Boundary Anti-Aliasing**: Signed distance transform level set smoothing ($\sigma = 1.5\text{ px} = 15\text{ m}$) converts $90^\circ$ jagged pixel staircases into smooth, natural organic flood boundaries.
+4. **Foreground MMU Sieve**: Purges isolated floating noise patches and farmland puddles ($< 50\text{ px} = 0.5\text{ ha}$).
+5. **Topographic Depth Inpainting ($z_s - z_{\text{DEM}}$) & Field Calibration**: Inpaints water surface elevation into bridged/filled areas and calculates physical depth anchored to local DEM ground elevations. Exposes calibration parameters (`depth_scale` $\alpha$ and `depth_offset` $\beta$) to match measured ground-truth survey points:
+   $$\text{depth}_{\text{calibrated}} = \alpha \cdot \text{depth} + \beta$$
 
 ---
 

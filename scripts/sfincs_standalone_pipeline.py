@@ -20,6 +20,7 @@ import numpy as np
 import pyproj
 import hydromt
 from hydromt_sfincs import SfincsModel, utils
+from scipy import ndimage
 
 # Ensure script directory is always in sys.path
 script_dir = Path(__file__).resolve().parent
@@ -678,6 +679,125 @@ def _clip_and_mask_raster(
         dst.write(out_image)
 
 
+def refine_flood_hazard_raster(
+    depth_tif: str,
+    dep_path: Union[str, Path],
+    hmin: float = 0.05,
+    island_mmu_px: int = 50,
+    hole_mmu_px: int = 50,
+    bridge_radius: int = 3,
+    smooth_sigma: float = 1.5,
+    depth_offset: float = 0.0,
+    depth_scale: float = 1.0,
+) -> None:
+    """
+    Refines raw downscaled flood depth rasters to eliminate numerical discretization
+    gaps, 90-degree jagged pixel staircases (serration), and isolated noise patches.
+    
+    Processing Steps:
+    1. Morphological Closing (bridges coarse 40m numerical grid gaps along channels).
+    2. Dual-MMU Hole-Filling (fills enclosed dry holes and internal voids <= hole_mmu_px).
+    3. Boundary Anti-Aliasing (signed distance transform smoothing to remove jagged teeth).
+    4. Foreground MMU Sieve (purges isolated floating puddles/islands < island_mmu_px).
+    5. Topographic Depth Inpainting (Zs - DEM) with normalized spatial smoothing
+       and field survey calibration (depth_cal = depth * depth_scale + depth_offset).
+    """
+    with rasterio.open(depth_tif) as src_d:
+        raw_depth = src_d.read(1)
+        profile = src_d.profile.copy()
+        nodata_d = src_d.nodata
+        
+    with rasterio.open(str(dep_path)) as src_dem:
+        if src_dem.shape == raw_depth.shape:
+            dem = src_dem.read(1)
+        else:
+            dem = np.zeros_like(raw_depth, dtype=np.float32)
+            rasterio.warp.reproject(
+                source=rasterio.band(src_dem, 1),
+                destination=dem,
+                src_transform=src_dem.transform,
+                src_crs=src_dem.crs,
+                dst_transform=profile["transform"],
+                dst_crs=profile["crs"],
+                resampling=rasterio.warp.Resampling.bilinear,
+            )
+            
+    valid_mask = ~np.isnan(raw_depth)
+    if nodata_d is not None and not np.isnan(nodata_d):
+        valid_mask &= (raw_depth != nodata_d)
+    raw_wet_mask = valid_mask & (raw_depth >= hmin)
+    
+    # 1. Morphological Closing (Bridge 40m discretization gaps)
+    if bridge_radius > 0:
+        y, x = np.ogrid[-bridge_radius:bridge_radius+1, -bridge_radius:bridge_radius+1]
+        kernel = (x**2 + y**2) <= bridge_radius**2
+        closed_mask = ndimage.binary_closing(raw_wet_mask, structure=kernel)
+    else:
+        closed_mask = raw_wet_mask
+        
+    # 2. Dual-MMU Hole-Filling (Inverse Sieve: fill enclosed holes & dry pockets <= hole_mmu_px)
+    struct_8 = np.ones((3, 3), dtype=bool)
+    enclosed_filled = ndimage.binary_fill_holes(closed_mask)
+    
+    if hole_mmu_px > 0:
+        dry_mask = ~enclosed_filled
+        labeled_dry, num_dry = ndimage.label(dry_mask, structure=struct_8)
+        dry_sizes = ndimage.sum(dry_mask, labeled_dry, range(1, num_dry + 1))
+        dry_sizes_zero = np.concatenate([[0], dry_sizes])
+        dry_patch_sizes = dry_sizes_zero[labeled_dry]
+        small_holes_mask = (dry_patch_sizes <= hole_mmu_px) & (dry_patch_sizes > 0)
+        filled_mask = enclosed_filled | small_holes_mask
+    else:
+        filled_mask = enclosed_filled
+        
+    # 3. Boundary Anti-Aliasing (Signed Distance Transform Smoothing)
+    if smooth_sigma > 0:
+        dist_in = ndimage.distance_transform_edt(filled_mask)
+        dist_out = ndimage.distance_transform_edt(~filled_mask)
+        signed_dist = dist_in - dist_out
+        smooth_dist = ndimage.gaussian_filter(signed_dist, sigma=smooth_sigma)
+        smooth_mask = smooth_dist >= 0.0
+    else:
+        smooth_mask = filled_mask
+        
+    # 4. Foreground MMU Sieve (Prune isolated noise patches < island_mmu_px)
+    if island_mmu_px > 0:
+        labeled_wet, num_wet = ndimage.label(smooth_mask, structure=struct_8)
+        wet_sizes = ndimage.sum(smooth_mask, labeled_wet, range(1, num_wet + 1))
+        wet_sizes_zero = np.concatenate([[0], wet_sizes])
+        wet_patch_sizes = wet_sizes_zero[labeled_wet]
+        final_mask = smooth_mask & (wet_patch_sizes >= island_mmu_px)
+    else:
+        final_mask = smooth_mask
+        
+    # 5. Topographic Depth Inpainting & Calibration (Zs - DEM)
+    zs = np.where(raw_wet_mask, raw_depth + dem, np.nan)
+    nan_mask = np.isnan(zs)
+    ind = ndimage.distance_transform_edt(nan_mask, return_distances=False, return_indices=True)
+    zs_infilled = zs[tuple(ind)]
+    
+    depth_recon = np.where(final_mask, np.maximum(hmin, zs_infilled - dem), 0.0)
+    
+    if smooth_sigma > 0:
+        weight = final_mask.astype(float)
+        smooth_w = ndimage.gaussian_filter(weight, sigma=smooth_sigma)
+        smooth_d = ndimage.gaussian_filter(depth_recon, sigma=smooth_sigma)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            norm_depth = np.where(final_mask, smooth_d / np.maximum(smooth_w, 1e-5), np.nan).astype(np.float32)
+    else:
+        norm_depth = depth_recon.astype(np.float32)
+        
+    # Apply calibration formula: depth_cal = depth * depth_scale + depth_offset
+    calibrated_depth = norm_depth * depth_scale + depth_offset
+    final_depth = np.where(final_mask, np.maximum(hmin, calibrated_depth), np.nan).astype(np.float32)
+    
+    # Overwrite raster
+    profile.update(dtype=rasterio.float32, count=1, nodata=np.nan, compress="lzw")
+    with rasterio.open(depth_tif, "w", **profile) as dst:
+        dst.write(final_depth, 1)
+        dst.set_band_description(1, "Calibrated Anti-Aliased Seamless Flood Depth 10m")
+
+
 def postprocess_sfincs_hazard(
     das_id: str,
     rp: str,
@@ -686,9 +806,16 @@ def postprocess_sfincs_hazard(
     das_clusters_gpkg: str = "data/das_clusters.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
     hmin: float = 0.05,
+    island_mmu_px: int = 50,
+    hole_mmu_px: int = 50,
+    bridge_radius: int = 3,
+    smooth_sigma: float = 1.5,
+    depth_offset: float = 0.0,
+    depth_scale: float = 1.0,
 ):
     """
     Downscales SFINCS water levels to high-resolution topography,
+    applies unified seamless anti-aliasing & dual-MMU hole-filling,
     clips strictly to cluster boundary, masks out permanent lake bodies,
     and computes Fuzzy Large BNPB hazard classifications.
     """
@@ -747,12 +874,31 @@ def postprocess_sfincs_hazard(
         if cand.exists():
             das_clusters_gpkg = str(cand)
             
+    das_geom = None
     if os.path.exists(das_clusters_gpkg):
         das_gdf = gpd.read_file(das_clusters_gpkg)
         das_geom, _ = find_cluster_geometry(das_gdf, das_id)
         if not das_geom.empty:
             print(f"[{das_id}][{rp}] Clipping depth map to catchment boundary...")
             _clip_and_mask_raster(depth_tif, das_geom, lake_gpkg=lake_gpkg)
+            
+    # Apply Dual-MMU, anti-aliasing, and topographic depth reconstruction
+    print(f"[{das_id}][{rp}] Refining flood hazard raster (Anti-Aliasing, Hole-Filling, MMU Pruning)...")
+    refine_flood_hazard_raster(
+        depth_tif=depth_tif,
+        dep_path=dep_path,
+        hmin=hmin,
+        island_mmu_px=island_mmu_px,
+        hole_mmu_px=hole_mmu_px,
+        bridge_radius=bridge_radius,
+        smooth_sigma=smooth_sigma,
+        depth_offset=depth_offset,
+        depth_scale=depth_scale,
+    )
+    
+    # Re-apply catchment & lake boundary mask to guarantee strict boundaries
+    if das_geom is not None and not das_geom.empty:
+        _clip_and_mask_raster(depth_tif, das_geom, lake_gpkg=lake_gpkg)
     
     print(f"[{das_id}][{rp}] Computing Fuzzy Large Flood Hazard Index & BNPB Classification...")
     classify_perka_bnpb(
@@ -765,6 +911,7 @@ def postprocess_sfincs_hazard(
         low_fhi_thresh=0.333,
         high_fhi_thresh=0.666,
     )
+    print(f"[{das_id}][{rp}] Complete. Refined Flood Depth saved: {depth_tif}")
     print(f"[{das_id}][{rp}] Complete. Hazard Level saved: {hazard_tif}")
     print(f"[{das_id}][{rp}] Complete. Hazard Index saved: {fhi_tif}")
 
