@@ -48,6 +48,18 @@ if proj_dir.exists():
 if gdal_dir.exists():
     os.environ["GDAL_DATA"] = str(gdal_dir)
 
+# Register project bin directory for Windows 11 DLL isolation
+if sys.platform == "win32":
+    bin_path = (script_dir.parent / "bin").resolve()
+    if bin_path.exists():
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(bin_path))
+            except Exception:
+                pass
+        if str(bin_path) not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = str(bin_path) + os.pathsep + os.environ.get("PATH", "")
+
 
 def normalize_cluster_id(raw_val) -> str:
     """Universal normalizer for cluster identifiers across any project or region."""
@@ -934,7 +946,17 @@ def create_sfincs_flood_animation(
     Dynamically adjusts to any regional coordinate system and gracefully handles missing optional boundary layers.
     """
     import io
-    import imageio.v2 as imageio
+    try:
+        import imageio.v2 as imageio
+        use_imageio = True
+    except ImportError:
+        try:
+            import imageio
+            use_imageio = True
+        except ImportError:
+            use_imageio = False
+            from PIL import Image as PILImage
+
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from rasterio.features import rasterize
@@ -1110,9 +1132,23 @@ def create_sfincs_flood_animation(
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=120, bbox_inches="tight")
         buf.seek(0)
-        frames.append(imageio.imread(buf))
+        if use_imageio:
+            frames.append(imageio.imread(buf))
+        else:
+            frames.append(PILImage.open(buf).copy())
         plt.close(fig)
 
-    imageio.mimsave(str(anim_gif_path), frames, fps=fps, loop=0)
+    if use_imageio:
+        imageio.mimsave(str(anim_gif_path), frames, fps=fps, loop=0)
+    else:
+        duration_ms = int(1000 / max(fps, 1))
+        frames[0].save(
+            str(anim_gif_path),
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+        )
     print(f"[{das_id}][{rp}] Animation compiled: {anim_gif_path}")
     return str(anim_gif_path)

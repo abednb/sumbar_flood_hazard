@@ -1,5 +1,5 @@
 # Environments & Python Virtualenvs
-env*/
+env-*/
 .venv/
 __pycache__/
 *.pyc
@@ -30,6 +30,7 @@ qc_reports/
 # Binaries, Temp, & OS Metadata
 bin/
 temp/
+*.log
 .DS_Store
 .ipynb_checkpoints/
 *.ipynb_checkpoints
