@@ -630,7 +630,18 @@ def run_sfincs_model(
         pbar.close()
 
         if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, cmd)
+            err_snippet = ""
+            if log_path.exists():
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as lf:
+                        lines = lf.readlines()
+                        err_snippet = "".join(lines[-35:])
+                except Exception:
+                    pass
+            print(f"\n❌ SFINCS Simulation Failed for [{das_id}][{rp}] (Exit Code {proc.returncode})!\n"
+                  f"--- Tail of sfincs_run.log ---\n{err_snippet}\n"
+                  f"--------------------------------", file=sys.stderr)
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output=err_snippet)
             
     print(f"[{das_id}][{rp}] Simulation finished successfully.")
 
