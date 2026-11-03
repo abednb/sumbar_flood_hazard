@@ -48,7 +48,7 @@ sumbar_flood_hazard/
 ├── 01_sfincs_flood_hazard_run.ipynb  # Master batch execution notebook (13 DAS x 6 RP)
 ├── Flood_Hazard_DAS101_RP100.ipynb   # Single-DAS prototype notebook (DAS_101, RP100)
 ├── Flood_Hazard_DAS102_RP100.ipynb   # Single-DAS prototype notebook (DAS_102, RP100)
-├── data_catalog_sfincs.yml           # HydroMT v1.x data catalog
+├── data_catalog_sfincs.yml           # HydroMT 0.10.1 / hydromt_sfincs 1.2.2 data catalog
 └── docs/                             # Engineering documentation
     ├── README.md                     # Project overview
     ├── TUTORIAL.md                   # Step-by-step tutorial guide

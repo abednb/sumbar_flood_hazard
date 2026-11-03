@@ -6,13 +6,14 @@ High-resolution 2D hydrodynamic flood hazard modeling pipeline for 14 clustered 
 
 ## Modeling Approach: HydroMT-SFINCS by Deltares
 
-This project utilizes **Deltares SFINCS** (*Super-Fast INundation of CoastS and riverS*) in **Standalone Direct Rainfall-on-Grid Mode**:
-* **Subgrid Topography**: Downscaled to 10 m FABDEM elevation with 40 m flux routing cells.
-* **Direct Rain Forcing**: 24-hour design storm hyetographs applied directly over active basin cells.
-* **Calibrated Soil Infiltration**: 2D physical matrix coupling Ministry of Agriculture (*Kementerian Pertanian*) Soil Texture with BIG RBI Land Cover ($q_{\text{inf}} \in [0.05, 3.50]\text{ mm/hr}$).
-* **Manning Roughness**: Distributed surface roughness mapped from BIG RBI Land Cover classes.
-* **River Flow Routing**: Integrated with BIG RBI river channels (`rivers.gpkg`).
-* **Hazard Post-Processing**: Automated downscaling, Continuous Flood Hazard Index (FHI), and official Perka BNPB No. 2 Tahun 2012 hazard classification (Rendah, Sedang, Tinggi).
+This project utilizes **Deltares SFINCS** (*Super-Fast INundation of CoastS and riverS*, v2.4.0 Galibier Release) via **HydroMT 0.10.1** and **hydromt-sfincs 1.2.2** in **Standalone Direct Rainfall-on-Grid Mode**:
+* **Subgrid Topography**: 40 m computational flux mesh coupled with 10 m subgrid hypsometry derived from FABDEM (30 m native, bilinearly resampled to 10 m).
+* **Extended Direct Rain Forcing**: 24-hour design storm hyetographs padded with 48 hours of zero-intensity recession forcing (72-hour total simulation duration) to capture peak propagation and catchment drainage.
+* **Conservative Soil Infiltration**: 2D physical matrix coupling Ministry of Agriculture (*Kementerian Pertanian*) Soil Texture with BIG RBI Land Cover under a conservative constant-loss assumption ($q_{\text{inf}} \in [0.00, 3.50]\text{ mm/hr}$), with optional SCS Curve Number parameterization.
+* **Distributed Manning Roughness**: Spatially distributed friction derived from integer-coded BIG RBI Land Cover (`data/landcover_rbi.tif`) following Chow (1959) and Arcement & Schneider (1989).
+* **River Channel Bathymetry**: River centerlines burned directly into subgrid hypsometry (`datasets_riv`) parameterized by regional hydraulic geometry power laws ($w = a \cdot A^b, d = c \cdot A^d$, Manning $n = 0.030$).
+* **Dual Boundary Conditioning**: Coastal sea-level waterlevel boundary ($z \le 0$) and designated outflow boundaries (`btype: outflow`, `msk=3`) at inland catchment outlets.
+* **Physical Hazard Post-Processing**: Automated downscaling, physically grounded depth reconstruction ($z_s - z_{\text{DEM}}$), continuous Flood Hazard Index (FHI), and official Perka BNPB No. 2 Tahun 2012 hazard classification (Rendah, Sedang, Tinggi) with QField survey validation.
 
 ---
 
@@ -49,7 +50,7 @@ sumbar_flood_hazard/
 │   ├── tools_das_cluster_optimization.ipynb
 │   ├── tools_generate_hillshade.ipynb
 │   └── tools_vector_clip_reproject_gpkg.ipynb
-├── data_catalog_sfincs.yml           # HydroMT v1.x data catalog index
+├── data_catalog_sfincs.yml           # HydroMT 0.10.1 / hydromt_sfincs 1.2.2 data catalog index
 ├── Field Survey.qgz                  # QGIS validation & field survey project
 ├── .gitignore
 └── README.md

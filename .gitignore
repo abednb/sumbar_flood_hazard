@@ -1,6 +1,8 @@
 # Environments & Python Virtualenvs
 env-*/
 .venv/
+.env
+.pytest_cache/
 __pycache__/
 *.pyc
 
@@ -22,6 +24,8 @@ data/rainfall/
 # Model Builds & Simulation Outputs
 models_sfincs_standalone/
 outputs_standalone/
+outputs_standalone_audit_baseline/
+outputs_standalone_v2/
 models_sfincs/
 models_wflow/
 outputs/
@@ -30,6 +34,7 @@ qc_reports/
 # Binaries, Temp, & OS Metadata
 bin/
 temp/
+archive/
 *.log
 .DS_Store
 .ipynb_checkpoints/

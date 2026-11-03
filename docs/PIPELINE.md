@@ -52,21 +52,25 @@ Where:
 
 ## 3. Physical Soil Infiltration Parameterization
 
-### 3.1 Resolving the Continuous Infiltration Sponge Effect
-In continuous 24-hour hydrodynamic modeling, using high global saturated hydraulic conductivity values ($K_{\text{sat}} \approx 2.5 - 15\text{ mm/hr}$) drains surface flood volume continuously into the ground, underestimating flood depths and extents.
+### 3.1 Resolving the Continuous Infiltration Sponge Effect: Conservative Constant-Loss Assumption
+In continuous 2D hydrodynamic rain-on-grid simulations across 24–72 hours, using textbook initial saturated hydraulic conductivity values ($K_{\text{sat}} \approx 2.5 - 25\text{ mm/hr}$, e.g. Rawls et al., 1982) continuously drains surface flood volume into the subsurface (*sponge effect*). In reality, during severe tropical rainstorms, surface soils reach near-complete saturation within the initial 1–2 hours, after which the effective infiltration rate drops asymptotically to low saturated percolation rates, or zero where the shallow groundwater table rises to the surface.
 
-By coupling official **Kementerian Pertanian Soil Texture** (`TeksturTanah_Kementan.gpkg`) with **BIG RBI Land Cover** (`tutupan_lahan_rbi.gpkg`), we assign calibrated, physically grounded infiltration rates:
+Therefore, we implement a **conservative constant-loss assumption** parameterized by the matrix in `lookup_tables/soil_infiltration_lookup.csv` (10–100× lower than textbook dry-soil conductivity):
 
-| Kementan Soil Texture | Agricultural / Paddy / Urban ($q_{\text{inf}}$) | Plantation / Scrub ($q_{\text{inf}}$) | Primary Forest ($q_{\text{inf}}$) |
-| :--- | :--- | :--- | :--- |
-| **Halus (Fine Clay / Silt)** | **$0.05\text{ mm/hr}$** | $0.20\text{ mm/hr}$ | $0.50\text{ mm/hr}$ |
-| **Agak Halus (Clay Loam)** | **$0.10\text{ mm/hr}$** | $0.35\text{ mm/hr}$ | $0.80\text{ mm/hr}$ |
-| **Sedang (Loam / Silt Loam)** | **$0.25\text{ mm/hr}$** | $0.60\text{ mm/hr}$ | $1.20\text{ mm/hr}$ |
-| **Agak Kasar (Sandy Loam)** | **$0.50\text{ mm/hr}$** | $1.00\text{ mm/hr}$ | $2.00\text{ mm/hr}$ |
-| **Kasar (Sand / Gravel)** | **$1.00\text{ mm/hr}$** | $2.00\text{ mm/hr}$ | $3.50\text{ mm/hr}$ |
-| **Matang / Mentah (Organic / Peat)** | **$0.01\text{ mm/hr}$** | $0.05\text{ mm/hr}$ | $0.15\text{ mm/hr}$ |
+| Kementan Soil Texture | Paddy (Sawah) | Urban (Permukiman) | Dryland Farm (Tegalan) | Plantation (Perkebunan) | Forest (Hutan) | Shrub (Semak Belukar) | Default |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Halus (Clay / Silt)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $0.25\text{ mm/h}$ | $0.30\text{ mm/h}$ | $0.60\text{ mm/h}$ | $0.35\text{ mm/h}$ | $0.25\text{ mm/h}$ |
+| **Agak Halus (Clay Loam)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $0.45\text{ mm/h}$ | $0.40\text{ mm/h}$ | $0.90\text{ mm/h}$ | $0.50\text{ mm/h}$ | $0.40\text{ mm/h}$ |
+| **Sedang (Loam / Silt Loam)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $0.75\text{ mm/h}$ | $0.60\text{ mm/h}$ | $1.50\text{ mm/h}$ | $0.80\text{ mm/h}$ | $0.70\text{ mm/h}$ |
+| **Agak Kasar (Sandy Loam)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $1.20\text{ mm/h}$ | $1.00\text{ mm/h}$ | $2.20\text{ mm/h}$ | $1.40\text{ mm/h}$ | $1.20\text{ mm/h}$ |
+| **Kasar (Sand / Gravel)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $2.00\text{ mm/h}$ | $1.50\text{ mm/h}$ | $3.50\text{ mm/h}$ | $2.20\text{ mm/h}$ | $2.00\text{ mm/h}$ |
+| **Gambut (Sapric/Fibric/Hemic)** | **$0.05\text{ mm/h}$** | **$0.01\text{ mm/h}$** | $0.20\text{ mm/h}$ | $0.20\text{ mm/h}$ | $0.20 - 0.30\text{ mm/h}$ | $0.20\text{ mm/h}$ | $0.20 - 0.30\text{ mm/h}$ |
+| **Badan Air (Water Bodies)** | **$0.00\text{ mm/h}$** | **$0.00\text{ mm/h}$** | $0.00\text{ mm/h}$ | $0.00\text{ mm/h}$ | $0.00\text{ mm/h}$ | $0.00\text{ mm/h}$ | $0.00\text{ mm/h}$ |
 
-This guarantees that during a 100-year storm ($375\text{ mm}/24\text{h}$), $>95\%$ of precipitation is preserved as overland flood volume.
+### 3.2 Configurable Infiltration Scheme (Constant vs SCS Curve Number)
+The pipeline supports both loss formulations via the model build configuration:
+- `constant`: Uniformly applies the 2D conservative loss raster (`setup_constant_infiltration`).
+- `cn`: Soil Conservation Service (SCS) Curve Number infiltration (`setup_cn_infiltration`), parameterizing initial abstraction and soil moisture retention ($S$) derived from Hydrologic Soil Groups (HSG A, B, C, D) mapped in `lookup_tables/soil_infiltration_lookup.csv`.
 
 ---
 
@@ -158,7 +162,7 @@ sumbar_flood_hazard/
 ├── 01_sfincs_flood_hazard_run.ipynb  # Master batch execution notebook
 ├── Flood_Hazard_DAS101_RP100.ipynb   # Single-DAS prototype (DAS_101)
 ├── Flood_Hazard_DAS102_RP100.ipynb   # Single-DAS prototype (DAS_102)
-├── data_catalog_sfincs.yml           # HydroMT v1.x data catalog
+├── data_catalog_sfincs.yml           # HydroMT 0.10.1 / hydromt_sfincs 1.2.2 data catalog
 └── docs/                             # Engineering documentation
     ├── README.md                     # Project overview
     ├── TUTORIAL.md                   # Step-by-step tutorial

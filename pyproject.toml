@@ -1,0 +1,48 @@
+[project]
+name = "sumbar-flood-hazard"
+version = "0.2.0"
+description = "2D Standalone Hydrodynamic Flood Hazard Modeling Pipeline (HydroMT 0.10.1 / SFINCS 2.4.0) for Sumatera Barat Watershed Clusters"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Sumatra Barat Flood Hazard Modeling Team" }
+]
+dependencies = [
+    "hydromt==0.10.1",
+    "hydromt-sfincs==1.2.2",
+    "geopandas>=1.0.0",
+    "rioxarray>=0.18.0",
+    "rasterio>=1.4.0",
+    "xarray>=2024.1.0",
+    "netCDF4>=1.7.0",
+    "matplotlib>=3.9.0",
+    "contextily>=1.6.0",
+    "folium>=0.17.0",
+    "tqdm>=4.66.0",
+    "pillow>=10.0.0",
+    "imageio>=2.34.0",
+    "ipykernel>=6.29.0",
+    "jupyterlab>=4.2.0",
+    "pyproj>=3.7.0",
+    "scipy>=1.14.0",
+    "shapely>=2.0.0",
+    "requests>=2.32.0",
+    "xugrid>=0.14.0",
+    "pyflwdir>=0.5.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,11 +1,14 @@
 # HydroMT-SFINCS Direct Rainfall-on-Grid (Standalone) Build Configuration
 # Designed for Full-Catchment DAS Modeling in Sumatera Barat
 #
-# Physics:
+# Physics & Numerics:
 #   - 2D Computational Mesh: 40m regular grid in EPSG:32747 (UTM 47S)
-#   - Subgrid Bathymetry: 10m FABDEM (4x4 sub-pixels per cell, multiple of 2)
-#   - Roughness: Spatially distributed Manning's n from RBI Land Cover
-#   - Infiltration: Spatially varying Saturated Hydraulic Conductivity (Ksat) [mm/hr]
+#   - Subgrid Hypsometry: 10m subgrid tables derived from FABDEM (30m native, bilinearly resampled to 10m)
+#     nr_subgrid_pixels: 4 means 40m cell / 4 = 10m subgrid pixels
+#   - Roughness: Spatially distributed Manning's n from BIG RBI Land Cover (integer-coded, Chow 1959 / Arcement & Schneider 1989)
+#   - River Channels: Mapped centerlines burned into subgrid bathymetry (datasets_riv) with hydraulic-geometry power law
+#   - Infiltration: Conservative constant-loss assumption (qinf mm/hr) from Kementan soil texture x RBI land cover matrix
+#   - Boundaries: Waterlevel (msk=2) at coastal sea level (z <= 0) and Outflow (msk=3) at inland watershed outlets
 
 setup_grid_from_region:
   res: 40
@@ -22,25 +25,30 @@ setup_mask_bounds:
   btype: waterlevel
   zmax: 0
 
-# --- High-Resolution Subgrid Topobathy & Friction ---
+# --- High-Resolution Subgrid Topobathy, Roughness & River Channel Burning ---
 setup_subgrid:
   datasets_dep:
     - elevtn: fabdem_sumbar
   datasets_rgh:
     - lulc: rbi_landcover_sumbar
       reclass_table: lookup_tables/manning_lookup.csv
-  nr_subgrid_pixels: 4      # 4 x 10m = 40m subgrid resolution (valid multiple of 2)
+  datasets_riv:
+    - centerlines: rbi_river_sumbar
+      rivwth: 20.0
+      rivdph: 1.5
+      manning: 0.030
+  nr_subgrid_pixels: 4      # 40m computational cell / 4 = 10m subgrid resolution (valid multiple of 2)
   write_dep_tif: true
   write_man_tif: false
 
-# --- River Hydrography & Synthetic Channel Inflows ---
-setup_river_inflow:
-  rivers: rbi_river_sumbar
-  river_upa: 5.0            # km2 threshold for upstream accumulation
-  river_width: 50.0         # Default bankfull channel width (m)
-  keep_rivers_geom: true
+# Note on setup_river_inflow:
+# In pure direct rainfall-on-grid simulations across complete watersheds, rain falls uniformly
+# on all cells and routes naturally through overland flow and stream networks. Synthetic inflow
+# source points without discharge hydrographs are omitted here. When external upstream hydrographs
+# are supplied (e.g., from BWS stream gauges), setup_river_inflow is dynamically activated.
 
 # --- Infiltration / Hydrologic Loss Scheme ---
+# Default: Conservative constant-loss assumption (qinf [mm/hr])
 setup_constant_infiltration:
   qinf: soil_infiltration_sumbar
   reproj_method: average
