@@ -34,9 +34,9 @@ setup_subgrid:
       reclass_table: lookup_tables/manning_lookup.csv
   datasets_riv:
     - centerlines: rbi_river_sumbar
-      rivwth: 20.0
-      rivdph: 1.5
-      manning: 0.030
+      rivwth: 25.0           # Leopold & Maddock (1953) / BWS Sumatera V middle-reach channel width (m)
+      rivdph: 1.6            # BWS Sumatera V (2020, 2022) / Suripin (2004) aggraded bankfull depth before overtopping (m)
+      manning: 0.035         # SNI 2830:2008 / KP-03 natural meandering gravel/sand channel with debris
   nr_subgrid_pixels: 4      # 40m computational cell / 4 = 10m subgrid resolution (valid multiple of 2)
   write_dep_tif: true
   write_man_tif: false

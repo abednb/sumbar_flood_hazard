@@ -72,9 +72,12 @@ def test_size_limited_hole_filling_and_depth_reconstruction(tmp_path):
     raw_saved = tmp_path / "flood_depth_10m_raw.tif"
     assert raw_saved.exists(), "Raw depth raster was not preserved!"
 
-    # Read refined depth
+    # Read refined depth and metadata tags
     with rasterio.open(depth_path) as dst:
         refined_depth = dst.read(1)
+        tags = dst.tags()
+        assert tags.get("mmu_scale") == "1:50000", f"Unexpected mmu_scale tag: {tags.get('mmu_scale')}"
+        assert "Perka BIG" in tags.get("mmu_standard", ""), f"Unexpected mmu_standard tag: {tags.get('mmu_standard')}"
 
     # Assertion 1: Small dry pit (4 pixels) was filled
     pit_depths = refined_depth[10:12, 10:12]
@@ -87,3 +90,51 @@ def test_size_limited_hole_filling_and_depth_reconstruction(tmp_path):
 
     # Assertion 3: Background floodplain remains flooded
     assert np.all(np.isfinite(refined_depth[2:5, 2:5]))
+
+
+def test_morphological_bridging_across_embankment(tmp_path):
+    """Verify that morphological closing bridges narrow road embankments/culverts."""
+    shape = (30, 30)
+    dem = np.full(shape, 5.0, dtype=np.float32)
+    raw_depth = np.full(shape, 1.0, dtype=np.float32)
+    raw_depth[:, 14:16] = 0.0  # 2-pixel wide dry road cut (20m @ 10m grid)
+
+    dem_path = tmp_path / "dem_bridge.tif"
+    depth_path = tmp_path / "flood_depth_bridge.tif"
+
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "nodata": np.nan,
+        "width": 30,
+        "height": 30,
+        "count": 1,
+        "crs": "EPSG:32747",
+        "transform": rasterio.transform.from_bounds(0, 0, 300, 300, 30, 30),
+    }
+
+    with rasterio.open(dem_path, "w", **profile) as dst:
+        dst.write(dem, 1)
+
+    with rasterio.open(depth_path, "w", **profile) as dst:
+        dst.write(raw_depth, 1)
+
+    # Refine with bridge_radius=3 (30m closing kernel) and smooth_sigma=1.0
+    refine_flood_hazard_raster(
+        depth_tif=str(depth_path),
+        dep_path=dem_path,
+        hmin=0.05,
+        island_mmu_px=10,
+        hole_mmu_px=10,
+        bridge_radius=3,
+        smooth_sigma=1.0,
+    )
+
+    with rasterio.open(depth_path) as dst:
+        bridged_depth = dst.read(1)
+
+    # The interior 2-pixel road cut (rows 5 to 25) should now be bridged and flooded
+    road_cut_depths = bridged_depth[5:25, 14:16]
+    assert np.all(np.isfinite(road_cut_depths)), "Interior road embankment was not bridged by morphological closing!"
+    assert np.all(road_cut_depths >= 0.05), "Bridged road cut depth below hmin!"
+

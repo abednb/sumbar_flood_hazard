@@ -87,7 +87,7 @@ rbi_id,rbi_class_name,N,description
 85,Semak Belukar,0.07,Shrubland / Dense Brush
 86,Stadion/Tribun/Bangunan Olah Raga,0.08,Stadium / Sports Arena
 87,Stasiun Pompa Bahan Bakar Umum,0.08,Gas Station (SPBU)
-88,Sungai,0.03,River Channel / Stream
+88,Sungai,0.035,Natural river channel (SNI 2830:2008 / KP-03 PUPR / Chow 1959)
 89,Tegalan/Ladang,0.045,Dryland Farm / Upland Cropland
 90,Tambak,0.03,Brackish Water Fish/Shrimp Pond
 91,Tanah Kosong,0.03,Bare Soil / Vacant Land

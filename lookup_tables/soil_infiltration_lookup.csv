@@ -1,68 +1,79 @@
 # Soil Infiltration Capacity Lookup Matrix (Kementan Soil Texture x RBI Land Cover)
 # Units: mm/hr
 # 
-# Physical Rationale:
-# - Halus (Clay/Liat): Very low permeability (0.05 - 0.30 mm/hr), high runoff potential (HSG D)
-# - Agak halus (Clay Loam): Low permeability (0.20 - 0.60 mm/hr), (HSG C)
-# - Sedang (Loam/Silt Loam): Moderate permeability (0.60 - 1.20 mm/hr), (HSG B/C)
-# - Agak kasar (Sandy Loam): Moderately rapid permeability (1.20 - 2.50 mm/hr), (HSG B)
-# - Kasar (Sand): Rapid permeability (2.50 - 5.00 mm/hr), (HSG A)
-# - Gambut (Histosols): Impeded when saturated (0.10 - 0.40 mm/hr), (HSG D)
+# Scientific Grounding & Indonesian Standards:
+# - Sitanala Arsyad (2010) "Konservasi Tanah dan Air" (IPB Press)
+# - Helmut Kohnke (1968) / Uhland & O'Neal (1951) standardized steady-state final infiltration (fc)
+# - BBSDLP / Balittanah (2014) "Karakteristik Fisik Tanah dan Pengelolaan Hidrologi DAS"
+# - USDA-NRCS NEH Part 630 (Chapter 10: Estimation of Direct Runoff from Storm Rainfall) - Antecedent Moisture Condition III (AMC-III / Pre-Saturated Catchment)
+# - Triatmodjo (2008) "Hidrologi Terapan" (Beta Offset)
+#
+# Physical Rationale for SFINCS Constant-Loss Scheme (fc [mm/hr] under AMC-III):
+# Extreme flood hazard events (RP25, RP50, RP100) in Sumatera Barat occur during the wet monsoon season
+# following prolonged preceding rainfall (>53 mm 5-day antecedent rainfall). Under AMC-III, soil pore spaces
+# are pre-saturated, reducing steady-state infiltration capacity by ~25% compared to average AMC-II conditions.
+#
+# - Halus (Clay/Liat): Very low permeability (0.05 - 0.22 mm/hr), high runoff potential (HSG D)
+# - Agak halus (Clay Loam): Low permeability (0.15 - 0.45 mm/hr), (HSG C)
+# - Sedang (Loam/Silt Loam): Moderate permeability (0.45 - 0.90 mm/hr), (HSG B/C)
+# - Agak kasar (Sandy Loam): Moderately rapid permeability (0.90 - 1.80 mm/hr), (HSG B)
+# - Kasar (Sand): Rapid permeability (1.80 - 3.75 mm/hr), (HSG A)
+# - Gambut (Histosols): Impeded when saturated (0.08 - 0.30 mm/hr), (HSG D)
 #
 # Land Cover Surface Modifiers:
 # - Sawah / Wetlands: Saturated soil conditions -> 0.05 mm/hr
 # - Permukiman / Urban: Impervious surface -> 0.01 mm/hr
-# - Perkebunan / Kebun: Surface compaction -> 0.30 - 0.80 mm/hr
-# - Hutan: Litter layer + high interception -> 1.20 - 2.50 mm/hr
+# - Perkebunan / Kebun: Surface compaction -> 0.22 - 0.60 mm/hr
+# - Hutan: Litter layer + high interception -> 0.90 - 1.80 mm/hr
 soil_texture,landcover_category,infiltration_rate_mm_hr,hsg_class,description
 Halus,Sawah,0.05,D,Clay soil in paddy fields (near 100% saturation runoff)
 Halus,Permukiman,0.01,D,Clay soil in built-up urban zones (impervious)
-Halus,Perkebunan,0.30,D,Clay soil in plantation/oil palm
-Halus,Tegalan/Ladang,0.25,D,Clay soil in dryland farming
-Halus,Hutan,0.60,C,Clay soil in forested watershed
-Halus,Semak Belukar,0.35,D,Clay soil in shrubland
+Halus,Perkebunan,0.22,D,Clay soil in plantation under AMC-III
+Halus,Tegalan/Ladang,0.18,D,Clay soil in dryland farming under AMC-III
+Halus,Hutan,0.45,C,Clay soil in forested watershed under AMC-III
+Halus,Semak Belukar,0.26,D,Clay soil in shrubland under AMC-III
 Halus,Badan Air,0.00,D,Open water bodies
-Halus,Default,0.25,D,Default clay soil infiltration
+Halus,Default,0.18,D,Default clay soil infiltration under AMC-III
 Agak halus,Sawah,0.05,D,Clay loam in paddy fields
 Agak halus,Permukiman,0.01,D,Clay loam in urban zones
-Agak halus,Perkebunan,0.40,C,Clay loam in plantation
-Agak halus,Tegalan/Ladang,0.45,C,Clay loam in dryland agriculture
-Agak halus,Hutan,0.90,C,Clay loam in forested areas
-Agak halus,Semak Belukar,0.50,C,Clay loam in shrubland
+Agak halus,Perkebunan,0.30,C,Clay loam in plantation under AMC-III
+Agak halus,Tegalan/Ladang,0.34,C,Clay loam in dryland agriculture under AMC-III
+Agak halus,Hutan,0.68,C,Clay loam in forested areas under AMC-III
+Agak halus,Semak Belukar,0.38,C,Clay loam in shrubland under AMC-III
 Agak halus,Badan Air,0.00,D,Open water bodies
-Agak halus,Default,0.40,C,Default clay loam infiltration
+Agak halus,Default,0.30,C,Default clay loam infiltration under AMC-III
 Sedang,Sawah,0.05,D,Loam in paddy fields
 Sedang,Permukiman,0.01,D,Loam in urban zones
-Sedang,Perkebunan,0.60,C,Loam in plantation
-Sedang,Tegalan/Ladang,0.75,B,Loam in dryland farming
-Sedang,Hutan,1.50,B,Loam in forested areas
-Sedang,Semak Belukar,0.80,B,Loam in shrubland
+Sedang,Perkebunan,0.45,C,Loam in plantation under AMC-III
+Sedang,Tegalan/Ladang,0.56,B,Loam in dryland farming under AMC-III
+Sedang,Hutan,1.10,B,Loam in forested areas under AMC-III
+Sedang,Semak Belukar,0.60,B,Loam in shrubland under AMC-III
 Sedang,Badan Air,0.00,D,Open water bodies
-Sedang,Default,0.70,B,Default loam soil infiltration
+Sedang,Default,0.52,B,Default loam soil infiltration under AMC-III
 Agak kasar,Sawah,0.05,D,Sandy loam in paddy fields
 Agak kasar,Permukiman,0.01,D,Sandy loam in urban zones
-Agak kasar,Perkebunan,1.00,B,Sandy loam in plantation
-Agak kasar,Tegalan/Ladang,1.20,B,Sandy loam in dryland farming
-Agak kasar,Hutan,2.20,A,Sandy loam in forest
-Agak kasar,Semak Belukar,1.40,B,Sandy loam in shrubland
+Agak kasar,Perkebunan,0.75,B,Sandy loam in plantation under AMC-III
+Agak kasar,Tegalan/Ladang,0.90,B,Sandy loam in dryland farming under AMC-III
+Agak kasar,Hutan,1.65,A,Sandy loam in forest under AMC-III
+Agak kasar,Semak Belukar,1.05,B,Sandy loam in shrubland under AMC-III
 Agak kasar,Badan Air,0.00,D,Open water bodies
-Agak kasar,Default,1.20,B,Default sandy loam infiltration
+Agak kasar,Default,0.90,B,Default sandy loam infiltration under AMC-III
 Kasar,Sawah,0.05,D,Sandy soil in paddy fields
 Kasar,Permukiman,0.01,D,Sandy soil in urban zones
-Kasar,Perkebunan,1.50,A,Sandy soil in plantation
-Kasar,Tegalan/Ladang,2.00,A,Sandy soil in dryland farming
-Kasar,Hutan,3.50,A,Sandy soil in forest
-Kasar,Semak Belukar,2.20,A,Sandy soil in shrubland
+Kasar,Perkebunan,1.10,A,Sandy soil in plantation under AMC-III
+Kasar,Tegalan/Ladang,1.50,A,Sandy soil in dryland farming under AMC-III
+Kasar,Hutan,2.60,A,Sandy soil in forest under AMC-III
+Kasar,Semak Belukar,1.65,A,Sandy soil in shrubland under AMC-III
 Kasar,Badan Air,0.00,D,Open water bodies
-Kasar,Default,2.00,A,Default coarse sand infiltration
-Matang,Default,0.20,D,Sapric peat soil (tanah gambut matang)
-Mentah,Default,0.30,D,Fibric peat soil (tanah gambut mentah)
-Agak matang,Default,0.25,D,Hemic peat soil (tanah gambut agak matang)
+Kasar,Default,1.50,A,Default coarse sand infiltration under AMC-III
+Matang,Default,0.15,D,Sapric peat soil under AMC-III (tanah gambut matang)
+Mentah,Default,0.22,D,Fibric peat soil under AMC-III (tanah gambut mentah)
+Agak matang,Default,0.18,D,Hemic peat soil under AMC-III (tanah gambut agak matang)
 Default,Sawah,0.05,D,Default paddy field
 Default,Permukiman,0.01,D,Default urban built-up
-Default,Perkebunan,0.50,C,Default plantation
-Default,Hutan,1.50,B,Default forest
-Default,Tegalan/Ladang,0.60,C,Default dryland farm
-Default,Semak Belukar,0.60,C,Default shrubland
+Default,Perkebunan,0.38,C,Default plantation under AMC-III
+Default,Hutan,1.10,B,Default forest under AMC-III
+Default,Tegalan/Ladang,0.45,C,Default dryland farm under AMC-III
+Default,Semak Belukar,0.45,C,Default shrubland under AMC-III
 Default,Badan Air,0.00,D,Default open water
-Default,Default,0.50,C,Global default infiltration rate
+Default,Default,0.38,C,Global default infiltration rate under AMC-III

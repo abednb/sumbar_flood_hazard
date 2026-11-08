@@ -45,3 +45,7 @@ archive/
 !models_sfincs_standalone/.gitkeep
 !outputs_standalone/.gitkeep
 
+# Regional Cluster Execution Notebooks (Keep master only in GitHub)
+notebook/sumbar2026/
+
+

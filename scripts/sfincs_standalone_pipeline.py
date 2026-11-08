@@ -164,15 +164,17 @@ def compute_river_hydraulic_geometry(
     is_double_line = (gdf["REMARK"] == "Sungai") if "REMARK" in gdf.columns else np.zeros(num_rivers, dtype=bool)
     length = gdf["SHAPE_Leng"].values if "SHAPE_Leng" in gdf.columns else np.full(num_rivers, 500.0)
 
-    # Hydraulic geometry power law proxy:
-    # Major named trunk channels: width 25-60m, depth 2.0-3.5m
-    # Minor tributaries: width 8-18m, depth 1.0-1.8m
-    rivwth = np.where(is_double_line | (has_name & (length > 2000)), 35.0, np.where(has_name, 20.0, 10.0))
-    rivdph = np.where(is_double_line | (has_name & (length > 2000)), 2.5, np.where(has_name, 1.8, 1.2))
+    # Hydraulic geometry power law proxy (Leopold & Maddock 1953; BWS Sumatera V 2020, 2022; Suripin 2004):
+    # Accounts for active riverbed aggradation (sedimentation) in middle/lower Sumatera reaches:
+    # Major named trunk channels: width 35-60m, depth 2.0m (aggraded from 2.5m)
+    # Secondary streams: width 20-30m, depth 1.6m (aggraded from 2.0m)
+    # Minor headwater tributaries: width 12-18m, depth 1.2m (aggraded from 1.4m)
+    rivwth = np.where(is_double_line | (has_name & (length > 2000)), 35.0, np.where(has_name, 25.0, 15.0))
+    rivdph = np.where(is_double_line | (has_name & (length > 2000)), 2.0, np.where(has_name, 1.6, 1.2))
 
     gdf["rivwth"] = np.round(rivwth, 1)
     gdf["rivdph"] = np.round(rivdph, 2)
-    gdf["manning"] = 0.030
+    gdf["manning"] = 0.035  # SNI 2830:2008 / KP-03 natural meandering river channels with gravel/debris
     return gdf
 
 
@@ -836,10 +838,10 @@ def refine_flood_hazard_raster(
     depth_tif: str,
     dep_path: Union[str, Path],
     hmin: float = 0.05,
-    island_mmu_px: int = 50,
-    hole_mmu_px: int = 50,
-    bridge_radius: int = 3,
-    smooth_sigma: float = 1.5,
+    island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
+    hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
+    bridge_radius: int = 3,    # Morphological closing radius in pixels (3 px = 30m; bridges culverts & road cuts)
+    smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
@@ -898,9 +900,9 @@ def refine_flood_hazard_raster(
         valid_mask &= (raw_depth != nodata_d)
     raw_wet_mask = valid_mask & (raw_depth >= hmin) & np.isfinite(dem)
 
-    # 1. Morphological Closing (Bridging coarse numerical cells) - applied if cosmetic or bridge_radius > 0
+    # 1. Morphological Closing (Bridging coarse numerical cells across road/culvert embankments)
     struct_8 = np.ones((3, 3), dtype=bool)
-    if cosmetic and bridge_radius > 0:
+    if bridge_radius > 0:
         y, x = np.ogrid[-bridge_radius:bridge_radius + 1, -bridge_radius:bridge_radius + 1]
         kernel = (x ** 2 + y ** 2) <= bridge_radius ** 2
         closed_mask = ndimage.binary_closing(raw_wet_mask, structure=kernel)
@@ -930,8 +932,8 @@ def refine_flood_hazard_raster(
     else:
         filled_mask = closed_mask.copy()
 
-    # 3. Boundary Anti-Aliasing (Signed distance transform) - only if cosmetic=True
-    if cosmetic and smooth_sigma > 0:
+    # 3. Boundary Anti-Aliasing (Signed distance transform)
+    if smooth_sigma > 0:
         dist_in = ndimage.distance_transform_edt(filled_mask)
         dist_out = ndimage.distance_transform_edt(~filled_mask)
         signed_dist = dist_in - dist_out
@@ -964,7 +966,7 @@ def refine_flood_hazard_raster(
     wet_cells = candidate_mask & np.isfinite(dem) & (depth_phys >= hmin)
     final_mask = wet_cells
 
-    if cosmetic and smooth_sigma > 0:
+    if smooth_sigma > 0:
         depth_raw_recon = np.where(final_mask, depth_phys, 0.0)
         weight = final_mask.astype(float)
         smooth_w = ndimage.gaussian_filter(weight, sigma=smooth_sigma)
@@ -982,17 +984,16 @@ def refine_flood_hazard_raster(
     profile.update(dtype=rasterio.float32, count=1, nodata=np.nan, compress="lzw")
 
     target_write_path = depth_tif
-    if cosmetic and out_display_tif:
-        target_write_path = out_display_tif
-
     with rasterio.open(target_write_path, "w", **profile) as dst:
         dst.write(final_depth, 1)
-        desc = "Cosmetic Display Flood Depth 10m" if cosmetic else "Calibrated Physical Flood Depth 10m"
+        desc = "Refined Flood Depth 10m (Hydro-Bridged & MMU Filtered)"
         dst.set_band_description(1, desc)
         dst.update_tags(
             hmin=str(hmin),
             hole_mmu_px=str(hole_mmu_px),
             island_mmu_px=str(island_mmu_px),
+            mmu_scale="1:50000",
+            mmu_standard="Perka BIG No. 1/2020 / SNI 19-6502.2-2010 / Perka BNPB No. 02/2012 (1.0 ha)",
             bridge_radius=str(bridge_radius),
             smooth_sigma=str(smooth_sigma),
             cosmetic=str(cosmetic),
@@ -1000,7 +1001,10 @@ def refine_flood_hazard_raster(
             depth_offset=str(depth_offset),
         )
 
-    print(f"[OK] Refined depth written to: {target_write_path} (cosmetic={cosmetic})")
+    if cosmetic and out_display_tif and str(out_display_tif) != str(depth_tif):
+        shutil.copy2(depth_tif, out_display_tif)
+
+    print(f"[OK] Refined depth written to: {target_write_path} (bridge_radius={bridge_radius}, smooth_sigma={smooth_sigma})")
 
 
 def format_output_cluster_id(das_id: str) -> str:
@@ -1029,10 +1033,10 @@ def postprocess_sfincs_hazard(
     das_clusters_gpkg: str = "data/das_clusters/sumbar_das_cluster.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
     hmin: float = 0.05,
-    island_mmu_px: int = 50,
-    hole_mmu_px: int = 50,
-    bridge_radius: int = 3,
-    smooth_sigma: float = 1.5,
+    island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
+    hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
+    bridge_radius: int = 3,    # Morphological closing radius in pixels (3 px = 30m; bridges culverts & road cuts)
+    smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,

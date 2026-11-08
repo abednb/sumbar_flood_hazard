@@ -1,4 +1,4 @@
-# Sumatera Barat Flood Hazard Pipeline — Standalone HydroMT-SFINCS
+# Sumatera Barat Flood Hazard Pipeline
 
 High-resolution 2D hydrodynamic flood hazard modeling pipeline for 14 clustered watershed basins (DAS clusters) across Sumatera Barat, generating flood depth, flood extent, BNPB hazard classifications, and flood propagation animations for 6 return periods (2, 5, 10, 25, 50, and 100 years).
 
