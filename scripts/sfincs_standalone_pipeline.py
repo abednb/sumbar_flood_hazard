@@ -840,8 +840,9 @@ def refine_flood_hazard_raster(
     hmin: float = 0.05,
     island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
     hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    bridge_radius: int = 3,    # Morphological closing radius in pixels (3 px = 30m; bridges culverts & road cuts)
+    bridge_radius: int = 1,    # Option 2: Morphological closing radius in pixels (1 px = 10m; bridges culverts & road cuts without cross-cell grid line bridging)
     smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
+    h_connect: float = 0.15,   # Option 3: Hydraulic connectivity core depth (0.15m; prunes thin unchannelized sheet flow from bridging)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
@@ -900,12 +901,31 @@ def refine_flood_hazard_raster(
         valid_mask &= (raw_depth != nodata_d)
     raw_wet_mask = valid_mask & (raw_depth >= hmin) & np.isfinite(dem)
 
-    # 1. Morphological Closing (Bridging coarse numerical cells across road/culvert embankments)
+    # 1. Hydraulic Connectivity Filtering (Option 3) & Morphological Closing (Option 2)
     struct_8 = np.ones((3, 3), dtype=bool)
     if bridge_radius > 0:
+        # Hydraulic Connectivity Filter:
+        # Only bridge flood bodies that possess a core flood depth >= h_connect.
+        # Prunes unchannelized thin sheet micro-ponding (h < h_connect) from bridging across cells.
+        if h_connect > hmin:
+            labeled_raw, num_features = ndimage.label(raw_wet_mask, structure=struct_8)
+            if num_features > 0:
+                max_depth_per_patch = ndimage.maximum(
+                    np.nan_to_num(raw_depth, nan=0.0), labeled_raw, range(1, num_features + 1)
+                )
+                lookup_max = np.concatenate([[0.0], max_depth_per_patch])
+                patch_max = lookup_max[labeled_raw]
+                bridging_seed_mask = raw_wet_mask & (patch_max >= h_connect)
+            else:
+                bridging_seed_mask = raw_wet_mask.copy()
+        else:
+            bridging_seed_mask = raw_wet_mask.copy()
+
         y, x = np.ogrid[-bridge_radius:bridge_radius + 1, -bridge_radius:bridge_radius + 1]
         kernel = (x ** 2 + y ** 2) <= bridge_radius ** 2
-        closed_mask = ndimage.binary_closing(raw_wet_mask, structure=kernel)
+        closed_mask = ndimage.binary_closing(bridging_seed_mask, structure=kernel)
+        # Preserve all original raw wet cells outside the bridging seed
+        closed_mask |= raw_wet_mask
     else:
         closed_mask = raw_wet_mask.copy()
 
@@ -996,6 +1016,7 @@ def refine_flood_hazard_raster(
             mmu_standard="Perka BIG No. 1/2020 / SNI 19-6502.2-2010 / Perka BNPB No. 02/2012 (1.0 ha)",
             bridge_radius=str(bridge_radius),
             smooth_sigma=str(smooth_sigma),
+            h_connect=str(h_connect),
             cosmetic=str(cosmetic),
             depth_scale=str(depth_scale),
             depth_offset=str(depth_offset),
@@ -1033,10 +1054,12 @@ def postprocess_sfincs_hazard(
     das_clusters_gpkg: str = "data/das_clusters/sumbar_das_cluster.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
     hmin: float = 0.05,
+    reproj_method: str = "bilinear",  # Option 1: Continuous bilinear water level interpolation (removes 40m stair-step ridges)
     island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
     hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    bridge_radius: int = 3,    # Morphological closing radius in pixels (3 px = 30m; bridges culverts & road cuts)
+    bridge_radius: int = 1,    # Option 2: Morphological closing radius in pixels (1 px = 10m; bridges culverts & road cuts without cross-cell grid line bridging)
     smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
+    h_connect: float = 0.15,   # Option 3: Hydraulic connectivity core depth (0.15m; prunes thin unchannelized sheet flow from bridging)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
@@ -1074,7 +1097,7 @@ def postprocess_sfincs_hazard(
     if not dep_path:
         raise FileNotFoundError(f"High-resolution topography not found for {das_id}.")
 
-    print(f"[{das_id}][{rp}] Downscaling flood depths with topography: {dep_path.name}")
+    print(f"[{das_id}][{rp}] Downscaling flood depths with topography: {dep_path.name} (reproj_method={reproj_method})")
     dep = hydromt.open_raster(str(dep_path.resolve()))
 
     das_tag = format_output_cluster_id(das_id)
@@ -1094,6 +1117,7 @@ def postprocess_sfincs_hazard(
         zsmax=zsmax,
         dep=dep,
         hmin=hmin,
+        reproj_method=reproj_method,
         floodmap_fn=raw_depth_tif,
     )
     shutil.copy2(raw_depth_tif, depth_tif)
@@ -1112,7 +1136,7 @@ def postprocess_sfincs_hazard(
             _clip_and_mask_raster(depth_tif, das_geom, lake_gpkg=lake_gpkg)
 
     # Refine flood depth (physically grounded hole-filling & depth reconstruction)
-    print(f"[{das_id}][{rp}] Refining flood depth raster (cosmetic={cosmetic})...")
+    print(f"[{das_id}][{rp}] Refining flood depth raster (reproj={reproj_method}, bridge_radius={bridge_radius}, h_connect={h_connect})...")
     refine_flood_hazard_raster(
         depth_tif=depth_tif,
         dep_path=dep_path,
@@ -1121,6 +1145,7 @@ def postprocess_sfincs_hazard(
         hole_mmu_px=hole_mmu_px,
         bridge_radius=bridge_radius,
         smooth_sigma=smooth_sigma,
+        h_connect=h_connect,
         depth_offset=depth_offset,
         depth_scale=depth_scale,
         cosmetic=cosmetic,
