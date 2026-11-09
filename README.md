@@ -118,9 +118,7 @@ This flood hazard modeling pipeline couples peer-reviewed hydrodynamic science w
 ### 1. 2D Hydrodynamic Modeling & Subgrid Numerical Frameworks
 
 * **Deltares SFINCS (Subgrid Hydrodynamics)**:
-  * Leijnse, T., van Ormondt, M., Nederhoff, K., & van Dongeren, A. (2021). *Coupling of a subgrid technique with a compound flood model for coastal inundation*. **Coastal Engineering**, 163, 103797. [https://doi.org/10.1016/j.coastaleng.2020.103797](https://doi.org/10.1016/j.coastaleng.2020.103797)
-  * Sadana, T., Aerts, J. C. J. H., Eilander, D., Merz, B., de Moel, H., Busker, T., Bril, V., & de Bruijn, J. (2025). *Validation of the Open-Source Hydrodynamic Model SFINCS on Historical River Floods at the Global Scale*. **EGUsphere** [Preprint]. [https://doi.org/10.5194/egusphere-2025-4387](https://doi.org/10.5194/egusphere-2025-4387)
-  * Eilander, D., Couasnon, A., Leijnse, T., Ikeuchi, H., Yamazaki, D., Muis, S., Dullaart, J., Haag, A., Winsemius, H. C., & Ward, P. J. (2023). *A globally applicable framework for compound flood hazard modeling*. **Natural Hazards and Earth System Sciences**, 23(2), 823–846. [https://doi.org/10.5194/nhess-23-823-2023](https://doi.org/10.5194/nhess-23-823-2023)
+  * Leijnse, T., van Ormondt, M., Nederhoff, K., & van Dongeren, A. (2021). *Coupling of a subgrid technique with a compound flood model for coastal inundation*. **Coastal Engineering**, 163, 103797. [https://doi.org/10.1016/j.coastaleng.2020.103797](https://doi.org/10.1016/j.coastaleng.2020.103797). *(Core formulation of SFINCS subgrid momentum equations, subgrid cell storage, and wet-dry cell transitions).*
 * **HydroMT Automated Modeling Framework**:
   * Eilander, D., van Verseveld, W., Stam, J., Winsemius, H., & Deltares HydroMT Contributors. (2023). *HydroMT: Hydro and Earth system Model Tools*. Deltares. [https://deltares.github.io/hydromt/](https://deltares.github.io/hydromt/)
 * **High-Resolution Bare-Earth Topography (FABDEM)**:
@@ -128,10 +126,8 @@ This flood hazard modeling pipeline couples peer-reviewed hydrodynamic science w
 * **FABDEM Bilinear Downscale Resampling (30 m to 10 m) & Continuous Terrain Reconstruction**:
   * Rees, W. G. (2000). *The accuracy of digital elevation models interpolated to higher resolutions*. **International Journal of Remote Sensing**, 21(1), 7–20. [https://doi.org/10.1080/014311600210965](https://doi.org/10.1080/014311600210965). *(Seminal theoretical formulation evaluating gridded DEM interpolation to higher spatial resolutions; proves that 2D bilinear interpolation provides bounded error estimation, preserves fractal terrain dimensions, and eliminates discontinuous stepped boundaries).*
   * Gorelick, N., Hancher, M., Dixon, M., Ilyushchenko, S., Thau, D., & Moore, R. (2017). *Google Earth Engine: Planetary-scale geospatial analysis for everyone*. **Remote Sensing of Environment**, 202, 18–27. [https://doi.org/10.1016/j.rse.2017.06.031](https://doi.org/10.1016/j.rse.2017.06.031). *(Authoritative documentation of the cloud-native Google Earth Engine architecture used to generate the 10 m downscaled FABDEM product via `.resample('bilinear')` affine coordinate transformations and multi-scale image reprojection).*
-  * Vaze, J., Teng, J., & Spencer, G. (2010). *Impact of DEM accuracy and resolution on topographic indices*. **Environmental Modelling & Software**, 25(10), 1086–1098. [https://doi.org/10.1016/j.envsoft.2010.03.014](https://doi.org/10.1016/j.envsoft.2010.03.014). *(Systematically examines the hydrological effects of DEM resolution changes and resampling methods on slopes, contributing catchment areas, flow accumulation paths, and topographic wetness indices).*
   * Saksena, S., & Merwade, V. (2015). *Incorporating the effect of DEM resolution and accuracy for improved flood inundation mapping*. **Journal of Hydrology**, 530, 180–194. [https://doi.org/10.1016/j.jhydrol.2015.09.067](https://doi.org/10.1016/j.jhydrol.2015.09.067). *(Quantifies hydraulic sensitivity, water surface elevation profiles, and flood inundation boundary variations when scaling DEM resolutions between 10 m and 30 m).*
   * Volp, N. D., van Prooijen, B. C., & Stelling, G. S. (2013). *A finite volume approach for shallow water flow accounting for high-resolution 2D subgrid elevation variations*. **Ocean Dynamics**, 63(4), 413–426. [https://doi.org/10.1007/s10236-013-0604-0](https://doi.org/10.1007/s10236-013-0604-0). *(Foundational numerical derivation for subgrid hypsometry: demonstrates that a continuous $C^0$ bilinear elevation surface prevents artificial shock waves and stair-step ridges when computing subgrid volume-elevation storage inside 2D numerical cells).*
-  * Hawker, L., Bates, P., Neal, J., & Rougier, J. (2018). *Perspectives on Digital Elevation Model (DEM) Simulation for Flood Hazard Modelling*. In: Guy J-P. Schumann (ed.), *Earth Observation for Flood Risk Management: Challenges and New Opportunities*, Elsevier, pp. 65–87. [https://doi.org/10.1016/B978-0-12-814880-8.00004-9](https://doi.org/10.1016/B978-0-12-814880-8.00004-9). *(Analyzes global DEM spatial resampling, resolution limits, and hydraulic propagation errors across floodplain domains).*
 
 ### 2. Fluvial Hydraulics, River Burning & Channel Aggradation
 
@@ -153,9 +149,8 @@ This flood hazard modeling pipeline couples peer-reviewed hydrodynamic science w
 * **Indonesian Tropical Soil Infiltration Capacity**:
   * Arsyad, S. (2010). *Konservasi Tanah dan Air* (Edisi Kedua). IPB Press, Bogor. *(Authoritative empirical final infiltration rates fc for Indonesian Inceptisols, Ultisols, and Andisols).*
   * Balai Besar Penelitian dan Pengembangan Sumberdaya Lahan Pertanian (BBSDLP) / Balittanah. (2014). *Karakteristik Fisik Tanah dan Pengelolaan Hidrologi DAS*. Badan Penelitian dan Pengembangan Pertanian, Kementerian Pertanian Republik Indonesia, Bogor.
-* **Classical Steady-State Infiltration Physics**:
-  * Green, W. H., & Ampt, G. A. (1911). *Studies on Soil Physics: Part I. Flow of Air and Water through Soils*. **The Journal of Agricultural Science**, 4(1), 1–24. [https://doi.org/10.1017/S0021859600001440](https://doi.org/10.1017/S0021859600001440)
-  * Kohnke, H. (1968). *Soil Physics*. McGraw-Hill, New York; and Uhland, R. E., & O'Neal, A. M. (1951). *Soil permeability determinations for use in soil and water conservation*. USDA Soil Conservation Service SCS-TP-101. *(Basis for SFINCS constant-loss steady-state infiltration rates fc).*
+* **Steady-State Saturated Infiltration Formulation**:
+  * Kohnke, H. (1968). *Soil Physics*. McGraw-Hill, New York; and Uhland, R. E., & O'Neal, A. M. (1951). *Soil permeability determinations for use in soil and water conservation*. USDA Soil Conservation Service SCS-TP-101. *(Basis for SFINCS constant-loss steady-state infiltration rates fc under saturated monsoon storm conditions).*
 
 ### 4. Floodplain Roughness & Flow Resistance
 
@@ -178,9 +173,6 @@ This flood hazard modeling pipeline couples peer-reviewed hydrodynamic science w
 * **National Disaster Management Authority (BNPB)**:
   * Peraturan Kepala BNPB (Perka BNPB) No. 02 Tahun 2012. *Pedoman Umum Pengkajian Risiko Bencana*. Badan Nasional Penanggulangan Bencana, Jakarta. *(Mandates 3-tier flood hazard depth thresholds: Rendah < 0.75 m, Sedang 0.75–1.50 m, Tinggi > 1.50 m, and 1.0 ha assessment grid unit for Kabupaten/Kota level in Sumatera).*
   * Undang-Undang Republik Indonesia No. 24 Tahun 2007. *tentang Penanggulangan Bencana*. Lembaran Negara Republik Indonesia Tahun 2007 No. 66.
-* **Design Flood Hydrology Standards**:
-  * Standar Nasional Indonesia (SNI) 2415:2016. *Tata cara perhitungan debit banjir rencana*. Badan Standardisasi Nasional (BSN), Jakarta. *(Guidelines for statistical distributions: Gumbel, Log Pearson Type III, and rainfall temporal distribution).*
-  * Standar Nasional Indonesia (SNI) 7746:2012. *Tata cara perhitungan debit andalan sungai dengan kurva durasi debit*. Badan Standardisasi Nasional (BSN), Jakarta.
 * **Continuous Fuzzy Hazard Scaling**:
   * Klir, G. J., & Yuan, B. (1995). *Fuzzy Sets and Fuzzy Logic: Theory and Applications*. Prentice Hall, Upper Saddle River, NJ. *(Fuzzy Large membership function f(x) = [1 + (x/x0)^(-s)]^(-1) applied to continuous flood depth vulnerability indexation).*
   * Zadeh, L. A. (1965). *Fuzzy sets*. **Information and Control**, 8(3), 338–353. [https://doi.org/10.1016/S0019-9958(65)90241-X](https://doi.org/10.1016/S0019-9958(65)90241-X).
