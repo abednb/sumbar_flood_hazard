@@ -190,3 +190,25 @@ def test_subgrid_hypsometric_volume_balance(tmp_path):
     res = volume_balance(model_dir)
     assert res["storage_method"] == "subgrid_hypsometric"
     assert res["final_storage_volume_m3"] == pytest.approx(100000.0, rel=1e-3)
+
+
+def test_release_hydromt_log_handlers_prevents_winerror32(tmp_path):
+    """Ensure leaked HydroMT FileHandlers on hydromt.log are closed so Windows unlink succeeds."""
+    import logging
+    from scripts.sfincs_standalone_pipeline import _release_hydromt_log_handlers
+
+    model_dir = tmp_path / "DAS_TEST"
+    model_dir.mkdir()
+    log_path = model_dir / "hydromt.log"
+
+    lg = logging.getLogger("hydromt.models.model_api.test_lock")
+    fh = logging.FileHandler(log_path)
+    lg.addHandler(fh)
+    lg.info("simulated hydromt log entry")
+
+    closed = _release_hydromt_log_handlers(model_dir)
+    assert closed >= 1
+    assert fh not in lg.handlers
+    # On Windows this raises PermissionError [WinError 32] if the handler was not closed
+    log_path.unlink()
+    assert not log_path.exists()

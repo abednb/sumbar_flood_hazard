@@ -6,8 +6,10 @@ with dynamic CRS, flexible cluster identifier matching, automated data chipping,
 subgrid river burning, rigorous boundary conditioning, and Perka BNPB No. 2/2012 classification.
 """
 
+import gc
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -36,6 +38,50 @@ from geo_utils import compute_wmo_arf, get_dynamic_recession_hours
 from perka_bnpb_classification import classify_perka_bnpb
 from qa_checks import check_roughness, check_boundaries, check_peak_timing, volume_balance, run_all_qa
 from validate_against_survey import validate_flood_map
+
+
+def _release_hydromt_log_handlers(target_dir: Optional[Union[str, Path]] = None) -> int:
+    """
+    Closes and removes leaked HydroMT logging.FileHandler instances (especially on Windows).
+    HydroMT's Model.set_root() attaches a FileHandler to hydromt.log on a module-level logger
+    and never closes it automatically; in long-lived Jupyter kernels this triggers
+    WinError 32 when a subsequent `hydromt build --fo` subprocess tries to unlink hydromt.log.
+    """
+    target_resolved = Path(target_dir).resolve() if target_dir is not None else None
+    closed = 0
+    loggers = [logging.getLogger()]
+    for lg in list(logging.root.manager.loggerDict.values()):
+        if isinstance(lg, logging.Logger):
+            loggers.append(lg)
+
+    for lg in loggers:
+        for handler in list(lg.handlers):
+            if not isinstance(handler, logging.FileHandler):
+                continue
+            fname = getattr(handler, "baseFilename", "")
+            if not fname:
+                continue
+            fpath = Path(fname)
+            should_close = fpath.name.lower() == "hydromt.log"
+            if should_close and target_resolved is not None:
+                try:
+                    fpath.resolve().relative_to(target_resolved)
+                except ValueError:
+                    should_close = False
+            if should_close:
+                try:
+                    handler.flush()
+                except Exception:
+                    pass
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+                lg.removeHandler(handler)
+                closed += 1
+    if closed:
+        gc.collect()
+    return closed
 
 
 def normalize_cluster_id(raw_val) -> str:
@@ -456,47 +502,47 @@ def prepare_cluster_clipped_rasters(
 
 # --- Active Watershed Domain Polygon (for setup_mask_active) ---
 das_region:
-  path: {abs_region_path}
+  path: "{abs_region_path}"
   data_type: GeoDataFrame
   driver: vector
   crs: {region_crs_val}
 
 # --- Elevation DEM ---
 fabdem_sumbar:
-  path: {abs_dem_path}
+  path: "{abs_dem_path}"
   data_type: RasterDataset
   driver: raster
   crs: {dem_crs_val}
 
 elevation_dem:
-  path: {abs_dem_path}
+  path: "{abs_dem_path}"
   data_type: RasterDataset
   driver: raster
   crs: {dem_crs_val}
 
 # --- Hydrography / River Network ---
 rbi_river_sumbar:
-  path: {abs_riv_path}
+  path: "{abs_riv_path}"
   data_type: GeoDataFrame
   driver: vector
   crs: {riv_crs_val}
 
 rivers:
-  path: {abs_riv_path}
+  path: "{abs_riv_path}"
   data_type: GeoDataFrame
   driver: vector
   crs: {riv_crs_val}
 
 # --- Land Cover & Roughness ---
 rbi_landcover_sumbar:
-  path: {lc_file.as_posix()}
+  path: "{lc_file.as_posix()}"
   data_type: RasterDataset
   driver: raster
   crs: {lc_crs_val}
   nodata: 0
 
 landcover:
-  path: {lc_file.as_posix()}
+  path: "{lc_file.as_posix()}"
   data_type: RasterDataset
   driver: raster
   crs: {lc_crs_val}
@@ -504,45 +550,45 @@ landcover:
 
 # --- Soil Infiltration Capacity (AMC-III qinf) ---
 soil_infiltration_sumbar:
-  path: {soil_file.as_posix()}
+  path: "{soil_file.as_posix()}"
   data_type: RasterDataset
   driver: raster
   crs: {soil_crs_val}
 
 soil_infiltration:
-  path: {soil_file.as_posix()}
+  path: "{soil_file.as_posix()}"
   data_type: RasterDataset
   driver: raster
   crs: {soil_crs_val}
 
 # --- Gridded Design Rainfall Events (Native netCDF coordinates, no forced CRS) ---
 rainfall_rp2:
-  path: {abs_root}/data/rainfall/rainfall_rp2_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp2_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 
 rainfall_rp5:
-  path: {abs_root}/data/rainfall/rainfall_rp5_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp5_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 
 rainfall_rp10:
-  path: {abs_root}/data/rainfall/rainfall_rp10_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp10_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 
 rainfall_rp25:
-  path: {abs_root}/data/rainfall/rainfall_rp25_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp25_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 
 rainfall_rp50:
-  path: {abs_root}/data/rainfall/rainfall_rp50_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp50_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 
 rainfall_rp100:
-  path: {abs_root}/data/rainfall/rainfall_rp100_hourly.nc
+  path: "{abs_root}/data/rainfall/rainfall_rp100_hourly.nc"
   data_type: RasterDataset
   driver: netcdf
 """
@@ -612,6 +658,20 @@ def build_sfincs_standalone(
     if force_overwrite:
         cmd.append("--fo")
 
+    # Release any leaked HydroMT FileHandlers from earlier runs in this Python/Jupyter kernel
+    # so Windows does not raise WinError 32 when `hydromt build --fo` unlinks hydromt.log.
+    _release_hydromt_log_handlers(model_root)
+    stale_log = model_root / "hydromt.log"
+    if force_overwrite and stale_log.exists():
+        try:
+            stale_log.unlink()
+        except PermissionError as exc:
+            raise PermissionError(
+                f"Cannot overwrite '{stale_log}' because another process holds a file lock on it "
+                f"(common on Windows when another Jupyter kernel or editor has the model folder open). "
+                f"Restart your Jupyter kernel (or close other open notebooks/QGIS layers using {model_root}) and re-run."
+            ) from exc
+
     print(f"[{das_id}] Building standalone SFINCS base model at {model_root}...")
     env = _env.get_proj_env()
 
@@ -620,8 +680,9 @@ def build_sfincs_standalone(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
-        universal_newlines=True,
         env=env,
     )
     for line in iter(proc.stdout.readline, ""):
@@ -632,32 +693,35 @@ def build_sfincs_standalone(
         raise subprocess.CalledProcessError(retcode, cmd)
 
     # 5. Outflow Boundary Conditioning (Issue H3)
-    if outlet_poly_path and outlet_poly_path.exists():
-        print(f"[{das_id}] Injecting outflow boundary cells (msk=3) at outlet...")
-        sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
-        sf.read()
-        try:
-            sf.setup_mask_bounds(
-                btype="outflow",
-                include_mask=str(outlet_poly_path),
-                reset_bounds=False,
-            )
-            sf.write_grid()
-        except Exception as e:
-            print(f"[{das_id}] Warning setting outflow boundary: {e}")
+    try:
+        if outlet_poly_path and outlet_poly_path.exists():
+            print(f"[{das_id}] Injecting outflow boundary cells (msk=3) at outlet...")
+            sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
+            sf.read()
+            try:
+                sf.setup_mask_bounds(
+                    btype="outflow",
+                    include_mask=str(outlet_poly_path),
+                    reset_bounds=False,
+                )
+                sf.write_grid()
+            except Exception as e:
+                print(f"[{das_id}] Warning setting outflow boundary: {e}")
 
-    # 6. Optional Hydraulic Structures / Gauges
-    if bws_structures_gpkg and os.path.exists(bws_structures_gpkg):
-        print(f"[{das_id}] Injecting hydraulic structures from {bws_structures_gpkg}...")
-        sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
-        sf.setup_structures(structures=bws_structures_gpkg, stype="weir", par1=0.6)
-        sf.write_structures()
+        # 6. Optional Hydraulic Structures / Gauges
+        if bws_structures_gpkg and os.path.exists(bws_structures_gpkg):
+            print(f"[{das_id}] Injecting hydraulic structures from {bws_structures_gpkg}...")
+            sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
+            sf.setup_structures(structures=bws_structures_gpkg, stype="weir", par1=0.6)
+            sf.write_structures()
 
-    if bws_gauges_gpkg and os.path.exists(bws_gauges_gpkg):
-        print(f"[{das_id}] Injecting observation gauges from {bws_gauges_gpkg}...")
-        sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
-        sf.setup_observation_points(locations=bws_gauges_gpkg)
-        sf.write_observation_points()
+        if bws_gauges_gpkg and os.path.exists(bws_gauges_gpkg):
+            print(f"[{das_id}] Injecting observation gauges from {bws_gauges_gpkg}...")
+            sf = SfincsModel(root=str(model_root), mode="r+", data_libs=[catalog_to_use])
+            sf.setup_observation_points(locations=bws_gauges_gpkg)
+            sf.write_observation_points()
+    finally:
+        _release_hydromt_log_handlers(model_root)
 
     # 7. Build-Time QA Gates (Issues C1, H3)
     print(f"[{das_id}] Running build-time Quality Assurance gates...")
@@ -950,6 +1014,8 @@ def prepare_sfincs_direct_rain_forcing(
         if coastal_mhhw_m is not None and float(coastal_mhhw_m) > 0.0:
             _apply_coastal_mhhw_to_case(case_dir, sf, mhhw_m=float(coastal_mhhw_m))
 
+        _release_hydromt_log_handlers(case_dir)
+        _release_hydromt_log_handlers(base_root)
         print(f"[{das_id}][{rp}] Case configuration ready at {case_dir}.")
 
 
