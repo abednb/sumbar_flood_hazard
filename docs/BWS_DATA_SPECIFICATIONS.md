@@ -1,5 +1,5 @@
-# Data Specification & Engineering Contract: BWS Hydraulic Datasets
-### Standardized Specifications for Integrating Balai Wilayah Sungai (BWS) Infrastructure & Gauge Data into HydroMT-SFINCS
+# BWS Data Specifications & Requirements: Hydraulic Datasets
+### Standardized Data Specifications for Integrating Balai Wilayah Sungai (BWS) Infrastructure & Gauge Data into HydroMT-SFINCS
 
 **Target Models:** Standalone HydroMT-SFINCS (National Indonesian v2.0 Standard)  
 **Target Coordinate Reference System (CRS):** Indonesian Auto-UTM (`EPSG:32646–32754`, e.g., `EPSG:32747` for Sumatera Barat) or `EPSG:4326` (WGS 84)  
@@ -21,7 +21,7 @@ data_raw/bws/
 
 ---
 
-## 2. Dataset Specifications & Data Contracts
+## 2. Dataset Specifications & Format Requirements
 
 ### 📋 Dataset 1: Flood Protection Levees & Embankments (`BWS_LEVEES_GPKG`)
 * **Typical Source:** BWS River Infrastructure Inventory (Inventarisasi Tanggul / Tebing Sungai).

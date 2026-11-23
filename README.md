@@ -1,5 +1,7 @@
 # Sumatera Barat Flood Hazard Mapping
 
+> **Language / Bahasa:** English | [**Dokumentasi Bahasa Indonesia (`docs/id/`)**](docs/id/README.md)
+
 Regional-scale 2D hydrodynamic flood hazard modeling pipeline for **17 clustered watershed basins** (`DAS_101`–`DAS_114`, with Mentawai disaggregated into `DAS_108_A`–`D`) across Sumatera Barat, generating flood depth, flood extent, Perka BNPB No. 02/2012 hazard classifications, continuous Flood Hazard Index (FHI), automated QA reports, and flood wave propagation animations for 6 return periods (`RP2`, `RP5`, `RP10`, `RP25`, `RP50`, and `RP100`).
 
 ---
@@ -30,13 +32,19 @@ sumbar_flood_hazard/
 ├── configs/                                  # HydroMT-SFINCS model build configurations
 │   ├── sfincs_standalone_build.yml           # Standard 40 m flux mesh / 10 m subgrid (silted rivers)
 │   └── sfincs_standalone_build_80m_fast.yml  # High-speed 80 m flux mesh / 10 m subgrid
-├── docs/                                     # Technical documentation & guides
-│   ├── README.md                             # Documentation index
+├── docs/                                     # Technical documentation & guides (English + Bahasa Indonesia)
+│   ├── README.md                             # Documentation index (English)
 │   ├── WINDOWS_INSTALLATION_GUIDE.md         # Local Windows setup guide (uv sync)
 │   ├── PIPELINE.md                           # Hydrodynamic formulation & architecture
 │   ├── TUTORIAL.md                           # Step-by-step execution guide
-│   ├── BWS_DATA_CONTRACT.md                  # Specifications for BWS levees/gauges/inflows
-│   └── REMEDIATION_REPORT.md                 # Historical engineering audit log
+│   ├── BWS_DATA_SPECIFICATIONS.md            # Specifications & requirements for BWS levees/gauges/inflows
+│   ├── REMEDIATION_REPORT.md                 # Historical engineering audit log
+│   └── id/                                   # Dokumentasi Bahasa Indonesia (Pedoman Teknis)
+│       ├── README.md                         # Indeks dokumentasi Bahasa Indonesia
+│       ├── PANDUAN_INSTALASI_WINDOWS.md      # Panduan instalasi pada Windows
+│       ├── TUTORIAL.md                       # Petunjuk teknis pelaksanaan pemodelan
+│       ├── PIPELINE.md                       # Spesifikasi teknis dan formulasi hidrodinamika
+│       └── SPESIFIKASI_DATA_BWS.md           # Spesifikasi dan persyaratan data BWS
 ├── env/                                      # Environment provisioning scripts
 │   ├── requirements.txt
 │   └── setup_env.ps1

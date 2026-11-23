@@ -1,8 +1,10 @@
 # Sumatera Barat Flood Hazard Pipeline — Documentation Index
 
+> **Language / Bahasa:** English | [**Baca Dokumentasi dalam Bahasa Indonesia (`docs/id/`)**](id/README.md)
+
 Welcome to the technical documentation hub for the **Sumatera Barat 2D Hydrodynamic Flood Hazard Modeling Pipeline** powered by **Deltares SFINCS** (*Super-Fast INundation of CoastS*, v2.4.0 Galibier Release) and **HydroMT-SFINCS `1.2.2`** (`.venv` via `uv`).
 
-This directory contains technical guides, data contracts, and engineering references for **17 clustered watershed basins** (`DAS_101` to `DAS_114`, with Mentawai disaggregated into `DAS_108_A`–`D`) across Sumatera Barat for 6 return periods (`RP2`, `RP5`, `RP10`, `RP25`, `RP50`, and `RP100`).
+This directory contains technical guides, data specifications, and engineering references for **17 clustered watershed basins** (`DAS_101` to `DAS_114`, with Mentawai disaggregated into `DAS_108_A`–`D`) across Sumatera Barat for 6 return periods (`RP2`, `RP5`, `RP10`, `RP25`, `RP50`, and `RP100`).
 
 ---
 
@@ -13,7 +15,7 @@ This directory contains technical guides, data contracts, and engineering refere
 | [**`WINDOWS_INSTALLATION_GUIDE.md`**](WINDOWS_INSTALLATION_GUIDE.md) | Beginners, Local Team Members, GIS Analysts | **6-step setup guide** to provision the unified `.venv` (`uv sync --extra dev`), register the `HydroMT-SFINCS` Jupyter kernel, unblock Windows 11 binaries, and run simulations without Conda. |
 | [**`TUTORIAL.md`**](TUTORIAL.md) | Geospatial Modelers, Hydrologists | **Step-by-step modeling tutorial** covering prepared datasets, single-cluster prototyping (40 m standard or 80 m fast mode), master batch execution, QA gates, and storage cleanup. |
 | [**`PIPELINE.md`**](PIPELINE.md) | Scientists, Hydraulic Engineers, Reviewers | **Mathematical formulation and hydrodynamic reference**: Shallow water equations, active masking, subgrid hypsometry, AMC-III soil infiltration, hydrostatic MMU post-processing, and Perka BNPB No. 02/2012 classification. |
-| [**`BWS_DATA_CONTRACT.md`**](BWS_DATA_CONTRACT.md) | BWS Sumatera V, PUPR, Field Surveyors | **Standardized data exchange contract** defining geometry and attribute schemas for integrating flood levees (`tanggul_sungai.gpkg`), AWLR gauges (`pos_awlr.gpkg`), and inflow hydrographs. |
+| [**`BWS_DATA_SPECIFICATIONS.md`**](BWS_DATA_SPECIFICATIONS.md) | BWS Sumatera V, PUPR, Field Surveyors | **Standardized BWS data specifications & requirements** defining geometry and attribute schemas for integrating flood levees (`tanggul_sungai.gpkg`), AWLR gauges (`pos_awlr.gpkg`), and inflow hydrographs. |
 | [**`REMEDIATION_REPORT.md`**](REMEDIATION_REPORT.md) | Technical Auditors, Senior Modelers | **Archival Engineering Audit Log** documenting historical physics, numerical, and geospatial fixes with unit test evidence. |
 
 ---
