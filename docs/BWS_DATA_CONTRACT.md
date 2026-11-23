@@ -1,8 +1,8 @@
 # Data Specification & Engineering Contract: BWS Hydraulic Datasets
 ### Standardized Specifications for Integrating Balai Wilayah Sungai (BWS) Infrastructure & Gauge Data into HydroMT-SFINCS
 
-**Target Models:** Standalone HydroMT-SFINCS  
-**Target Coordinate Reference System (CRS):** `EPSG:32747` (UTM Zone 47S in meters) or `EPSG:4326` (WGS84)  
+**Target Models:** Standalone HydroMT-SFINCS (National Indonesian v2.0 Standard)  
+**Target Coordinate Reference System (CRS):** Indonesian Auto-UTM (`EPSG:32646–32754`, e.g., `EPSG:32747` for Sumatera Barat) or `EPSG:4326` (WGS 84)  
 **Default Storage Location:** `data_raw/bws/`  
 
 ---
@@ -90,7 +90,7 @@ time,INFLOW_BATANG_ANAI,INFLOW_BATANG_KURANJI
 
 ## 3. Step-by-Step QA/QC Checklist When Data Arrives from BWS
 
-Before setting paths in [`01_sfincs_flood_hazard_run.ipynb`](../01_sfincs_flood_hazard_run.ipynb), run this quick check:
+Before setting paths in [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/master/01_sfincs_flood_hazard_run.ipynb), run this quick check:
 
 1. [ ] **CRS Check:** Vector layers reprojected to `EPSG:32747` (UTM 47S).
 2. [ ] **Levee Elevation:** Check that `z_crest` values are greater than surrounding DEM ground elevation (e.g. if ground is 12m, levee crest should be $\approx 14\text{ m}$, not relative $+2\text{ m}$).

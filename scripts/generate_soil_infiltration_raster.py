@@ -15,6 +15,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -26,8 +27,9 @@ script_dir = Path(__file__).resolve().parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 import _env
+from geo_utils import resolve_target_crs
 
-TARGET_CRS = "EPSG:32747"
+TARGET_CRS = "auto"
 
 
 def categorize_rbi(remark: str) -> str:
@@ -54,34 +56,45 @@ def categorize_rbi(remark: str) -> str:
 def generate_soil_infiltration_raster(
     soil_gpkg: str = "data_raw/soil/TeksturTanah_Kementan.gpkg",
     rbi_gpkg: str = "data_raw/rbi/landcover.gpkg",
-    rbi_layer: str = "lc_sumbar_lok26",
+    rbi_layer: Optional[str] = "auto",
     lookup_csv: str = "lookup_tables/soil_infiltration_lookup.csv",
-    ref_dem: str = "data/fabdem_reprojected.tif",
+    ref_dem: str = "data_raw/fabdem/FABDEM30m_Sumbar.tif",
     out_tif: str = "data/soil_infiltration_100m.tif",
     resolution: float = 100.0,
     default_rate: float = 0.50,
+    target_crs: str = TARGET_CRS,
 ) -> Path:
     """
-    Synthesizes the harmonized 2D infiltration grid.
+    Synthesizes the harmonized 2D infiltration grid (handles both WGS84 and projected reference DEMs
+    with automatic Indonesian UTM detection when target_crs='auto').
     """
+    from rasterio.warp import transform_bounds
+
     t_start = time.time()
     out_path = Path(out_tif).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    dem_path = Path(ref_dem).resolve()
+    if not dem_path.exists() and Path("data/fabdem_reprojected.tif").exists():
+        dem_path = Path("data/fabdem_reprojected.tif").resolve()
 
-    print(f"=== Generating Harmonized Soil Infiltration Capacity Raster ({resolution}m) ===")
+    resolved_crs = resolve_target_crs(target_crs, dem_path)
+    print(f"=== Generating Harmonized Soil Infiltration Capacity Raster ({resolution}m, {resolved_crs}) ===")
 
-    # 1. Target Grid Extent from Reference DEM
-    with rasterio.open(ref_dem) as ref:
-        bounds = ref.bounds
-        minx = np.floor(bounds.left / resolution) * resolution
-        miny = np.floor(bounds.bottom / resolution) * resolution
-        maxx = np.ceil(bounds.right / resolution) * resolution
-        maxy = np.ceil(bounds.top / resolution) * resolution
+    # 1. Target Grid Extent from Reference DEM (transformed to resolved_crs if needed)
+    with rasterio.open(dem_path) as ref:
+        if str(ref.crs) != resolved_crs:
+            left, bottom, right, top = transform_bounds(ref.crs, resolved_crs, *ref.bounds)
+        else:
+            left, bottom, right, top = ref.bounds
+        minx = np.floor(left / resolution) * resolution
+        miny = np.floor(bottom / resolution) * resolution
+        maxx = np.ceil(right / resolution) * resolution
+        maxy = np.ceil(top / resolution) * resolution
         width = int((maxx - minx) / resolution)
         height = int((maxy - miny) / resolution)
         transform = rasterio.transform.from_bounds(minx, miny, maxx, maxy, width, height)
 
-    print(f"Target Grid: {width} x {height} cells @ {resolution}m, CRS = {TARGET_CRS}")
+    print(f"Target Grid: {width} x {height} cells @ {resolution}m, CRS = {resolved_crs}")
 
     # 2. Load Lookup Matrix
     lookup_df = pd.read_csv(lookup_csv, comment="#")
@@ -94,8 +107,8 @@ def generate_soil_infiltration_raster(
     # 3. Load & Reproject Kementan Soil Texture
     print(f"Loading soil texture from {soil_gpkg}...")
     soil_gdf = gpd.read_file(soil_gpkg)
-    if str(soil_gdf.crs) != TARGET_CRS:
-        soil_gdf = soil_gdf.to_crs(TARGET_CRS)
+    if str(soil_gdf.crs) != resolved_crs:
+        soil_gdf = soil_gdf.to_crs(resolved_crs)
 
     soil_gdf["clean_texture"] = soil_gdf["K_Tekstur"].fillna("Default").astype(str).str.strip().str.lower()
     soil_gdf.loc[soil_gdf["clean_texture"] == "-", "clean_texture"] = "default"
@@ -110,10 +123,14 @@ def generate_soil_infiltration_raster(
     soil_raster = rasterize(soil_shapes, out_shape=(height, width), transform=transform, fill=0, dtype="uint8")
 
     # 4. Load & Reproject RBI Land Cover
-    print(f"Loading RBI landcover layer '{rbi_layer}' from {rbi_gpkg}...")
-    lc_gdf = gpd.read_file(rbi_gpkg, layer=rbi_layer)
-    if str(lc_gdf.crs) != TARGET_CRS:
-        lc_gdf = lc_gdf.to_crs(TARGET_CRS)
+    if rbi_layer is None or str(rbi_layer).strip().lower() == "auto":
+        print(f"Loading default RBI landcover layer from {rbi_gpkg}...")
+        lc_gdf = gpd.read_file(rbi_gpkg)
+    else:
+        print(f"Loading RBI landcover layer '{rbi_layer}' from {rbi_gpkg}...")
+        lc_gdf = gpd.read_file(rbi_gpkg, layer=rbi_layer)
+    if str(lc_gdf.crs) != resolved_crs:
+        lc_gdf = lc_gdf.to_crs(resolved_crs)
 
     lc_gdf["lc_cat"] = lc_gdf["REMARK"].apply(categorize_rbi)
     lc_classes = ["default", "sawah", "permukiman", "perkebunan", "tegalan/ladang", "hutan", "semak belukar", "badan air"]
@@ -160,7 +177,7 @@ def generate_soil_infiltration_raster(
         "width": width,
         "height": height,
         "count": 1,
-        "crs": TARGET_CRS,
+        "crs": resolved_crs,
         "transform": transform,
         "tiled": True,
         "blockxsize": 512,
@@ -182,11 +199,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate harmonized soil infiltration raster from Kementan x RBI matrix.")
     parser.add_argument("--soil", default="data_raw/soil/TeksturTanah_Kementan.gpkg", help="Path to Kementan soil GPKG")
     parser.add_argument("--rbi", default="data_raw/rbi/landcover.gpkg", help="Path to RBI landcover GPKG")
-    parser.add_argument("--layer", default="lc_sumbar_lok26", help="Layer name in RBI GPKG")
+    parser.add_argument("--layer", default="auto", help="Layer name in RBI GPKG (or 'auto' for default layer)")
     parser.add_argument("--lookup", default="lookup_tables/soil_infiltration_lookup.csv", help="Path to infiltration lookup CSV")
-    parser.add_argument("--dem", default="data/fabdem_reprojected.tif", help="Reference DEM")
+    parser.add_argument("--dem", default="data_raw/fabdem/FABDEM30m_Sumbar.tif", help="Reference DEM")
     parser.add_argument("--out", default="data/soil_infiltration_100m.tif", help="Output GeoTIFF path")
     parser.add_argument("--res", type=float, default=100.0, help="Resolution in meters (default 100m)")
+    parser.add_argument("--crs", default=TARGET_CRS, help="Target projected CRS or 'auto' for Indonesian UTM (default: auto)")
     args = parser.parse_args()
 
     generate_soil_infiltration_raster(
@@ -197,6 +215,7 @@ def main():
         ref_dem=args.dem,
         out_tif=args.out,
         resolution=args.res,
+        target_crs=args.crs,
     )
 
 

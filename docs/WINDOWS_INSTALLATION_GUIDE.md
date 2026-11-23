@@ -38,13 +38,13 @@ graph LR
   *(This automatically installs `uv`, provisions isolated **Python 3.12**, installs all geospatial packages in under 60 seconds, and registers the Jupyter kernel).*
 
 ### 5️⃣ Step 5: Open Notebook and Select the Dedicated Kernel
-* Open the master batch notebook in [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/master/01_sfincs_flood_hazard_run.ipynb) (or an individual cluster template in [`notebook/sumbar2026/Flood_Hazard_DAS101_RP100.ipynb`](../notebook/sumbar2026/Flood_Hazard_DAS101_RP100.ipynb)).
+* Open the master batch notebook in [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/master/01_sfincs_flood_hazard_run.ipynb).
 * In the top-right corner of the notebook editor, click **Select Kernel**:
-  * Choose **Python Environments...** $\rightarrow$ select **`env-sfincs`** (`.\env-sfincs\Scripts\python.exe`).
+  * Choose **Python Environments...** $\rightarrow$ select **`.venv`** (`.\.venv\Scripts\python.exe`).
   * *(Or select **Jupyter Kernel...** $\rightarrow$ **`HydroMT-SFINCS`**)*.
 
 > [!IMPORTANT]
-> **Avoid the "No module named pyproj" error**: When VS Code opens a notebook for the first time, it often defaults to your computer's global Windows Python. Always ensure the top-right kernel button displays **`env-sfincs`** or **`HydroMT-SFINCS`** before executing cells.
+> **Avoid the "No module named pyproj" error**: When VS Code opens a notebook for the first time, it often defaults to your computer's global Windows Python. Always ensure the top-right kernel button displays **`.venv`** or **`HydroMT-SFINCS`** before executing cells.
 
 ### 6️⃣ Step 6: Configure Your Assigned Watershed & Run!
 * In **Cell 1 (User Configuration Control Panel)**, set your assigned watershed ID and return period:
@@ -91,14 +91,11 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 # Refresh PATH in current terminal session
 $env:Path += ";$HOME\.local\bin;$HOME\.cargo\bin"
 
-# 2. Create isolated virtual environment with Python 3.12
-uv venv env-sfincs --python 3.12
+# 2. Provision unified virtual environment (.venv) from pyproject.toml + uv.lock
+uv sync --extra dev
 
-# 3. Install HydroMT-SFINCS and all geospatial dependencies
-uv pip install -r env/requirements.txt --python .\env-sfincs\Scripts\python.exe
-
-# 4. Register the Jupyter Kernel for VS Code
-.\env-sfincs\Scripts\python.exe -m ipykernel install --user --name hydromt-sfincs --display-name "HydroMT-SFINCS"
+# 3. Register the Jupyter Kernel for VS Code
+.\.venv\Scripts\python.exe -m ipykernel install --user --name hydromt-sfincs --display-name "HydroMT-SFINCS"
 ```
 
 ---
@@ -134,30 +131,32 @@ When running [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/ma
 * **Cell 2 — Environment & Data Verification**:
   Dynamically binds PROJ/GDAL paths from the active virtual environment and imports `sfincs_standalone_pipeline`.
 * **Cell 3 (Step 1) — Build SFINCS Base Grids**:
-  Extracts 40m computational domain, derives 10m subgrid tables from FABDEM, applies Manning roughness from RBI Land Cover, and injects authoritative **Kementan Soil Infiltration capacity**.
-* **Cell 4 (Step 2) — Apply Direct Rainfall-on-Grid Forcing**:
-  Binds 24-hour design storm hyetographs (`rainfall_<rp>.nc`) derived from statistical frequency analysis across the active watershed.
+  Extracts a masked `40 m` (or `80 m` fast mode) computational domain, derives 10 m subgrid tables on-the-fly from native 30 m FABDEM, burns silted rivers enhanced with `rivers_ar.gpkg`, and applies distributed Manning roughness from BIG RBI Land Cover.
+* **Cell 4 (Step 2) — Apply Direct Rainfall, CNB & Coastal MHHW Forcing**:
+  Binds 24-hour design storm hyetographs (`rainfall_<rp>.nc`) with dynamic zero-rain recession (`24–48 h`), applies USDA-NRCS `CNB` Curve Number infiltration (`smaxfile`/`sefffile`/`ksfile`), and sets `+0.80 m` coastal MHHW tidal backwater on coastal domains.
 * **Cell 5 (Step 3) — Run SFINCS Hydrodynamic Simulation Engine**:
   Executes the 2D solver with an interactive terminal progress bar (automatically selecting native `bin/sfincs.exe` or Docker fallback).
-* **Cell 6 (Step 4) — Post-Processing & BNPB Classification**:
-  Downscales water depth to 10m resolution using FABDEM, calculates continuous **Flood Hazard Index (0 to 1)** via Fuzzy Large membership, and assigns **Perka BNPB No. 2/2012** hazard classes (*Rendah*, *Sedang*, *Tinggi*).
+* **Cell 6 (Step 4) — Option B Post-Processing, Subgrid QA & BNPB Classification**:
+  Downscales water surface elevation to 10 m, applies the **Option B `+0.25 m` FABDEM flat-floodplain margin** (`< 5°`, `≤ 80 m`) and **4-connected `30 m × 30 m` floor**, computes continuous **Flood Hazard Index (0 to 1)** and **Perka BNPB No. 02/2012** classes, and runs automated subgrid hypsometric QA + QField validation.
 * **Cell 7 (Step 5) — Quick GIS Visualization & QA/QC**:
   Renders a publication-ready 3-panel verification figure (10m Flood Depth, Continuous FHI, and BNPB 3-Class Map).
-* **Cell 8 (Step 6) — 24-Hour Flood Wave Propagation Animation**:
-  Compiles dynamic hourly flood wave propagation into an animated looping GIF (`flood_propagation_24h.gif`).
+* **Cell 8 (Step 6) — Flood Wave Propagation Animation**:
+  Compiles dynamic hourly flood wave propagation into an animated looping GIF (`DASXXX_RPYYY_Flood_Animation.gif`).
 
 ---
 
 ## 📁 Output Artifacts Inspection
 
-Once the notebook finishes, all results are saved in `outputs_standalone/{das_id}/{rp}/`:
+Once the notebook finishes, all results are saved in `outputs/{das_id}/{rp}/`:
 
 ```
-outputs_standalone/DAS_104/rp100/
-├── flood_depth_10m.tif            <- Downscaled maximum inundation depth (m)
-├── flood_hazard_index.tif         <- Continuous Flood Hazard Index (0.0 to 1.0)
-├── hazard_class_perka2012.tif      <- BNPB Hazard Classes (1: Rendah, 2: Sedang, 3: Tinggi)
-└── flood_propagation_24h.gif      <- 24-hour animated flood propagation GIF
+outputs/DAS_104/rp100/
+├── DAS104_RP100_Flood_Depth.tif          <- Hydrostatically refined maximum inundation depth (m)
+├── DAS104_RP100_Flood_Depth_raw.tif      <- Raw unrefined downscaled simulation depth (m)
+├── DAS104_RP100_FloodHazard_Index.tif    <- Continuous Fuzzy Large Flood Hazard Index (0.0 to 1.0) + .qml
+├── DAS104_RP100_FloodHazard_Classes.tif  <- Perka BNPB No. 02/2012 Classes (1: Rendah, 2: Sedang, 3: Tinggi) + .qml
+├── qa_report.json                        <- Automated roughness, mask/boundary, peak timing & volume QA
+└── survey_validation.json                <- Outlier-screened validation against QField observations
 ```
 
 Open these GeoTIFFs in **QGIS** to inspect inundation boundaries and prepare thematic hazard cartography.
@@ -168,10 +167,10 @@ Open these GeoTIFFs in **QGIS** to inspect inundation boundaries and prepare the
 
 | Problem | Cause | Solution |
 | :--- | :--- | :--- |
-| **`No module named pyproj`** or **`ModuleNotFoundError`** | VS Code notebook connected to the global Windows Python instead of the virtual environment. | Click **Select Kernel** in top-right $\rightarrow$ **Python Environments...** $\rightarrow$ choose **`env-sfincs`** (or **Jupyter Kernel...** $\rightarrow$ **`HydroMT-SFINCS`**). |
+| **`No module named pyproj`** or **`ModuleNotFoundError`** | VS Code notebook connected to the global Windows Python instead of the virtual environment. | Click **Select Kernel** in top-right $\rightarrow$ **Python Environments...** $\rightarrow$ choose **`.venv`** (or **Jupyter Kernel...** $\rightarrow$ **`HydroMT-SFINCS`**). |
 | **`Running scripts is disabled on this system`** | Windows PowerShell execution policy restriction. | Run: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
 | **`HydroMT-SFINCS kernel not visible in VS Code`** | VS Code cached previous Python kernels. | Press `Ctrl + Shift + P` $\rightarrow$ select `Developer: Reload Window`. |
 | **`sfincs.exe exited with code 3221225781`** | Missing Microsoft Visual C++ 2015–2022 runtime or Intel Fortran DLLs. | Install [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe) and verify all 9 DLLs remain inside `bin/`. |
 | **`PermissionError: [WinError 5] Access is denied` on `sfincs.exe`** | Windows 11 SmartScreen / Mark-of-the-Web (MOTW) blocking network-copied binary. | Run in PowerShell: `Get-ChildItem -Path .\bin -Recurse \| Unblock-File` (or re-run `.\env\setup_env.ps1`). |
-| **`ImportError: DLL load failed while importing _gdal`** | PROJ or GDAL library path conflict. | Ensure you are executing from `env-sfincs` and Cell 2 of the notebook was run. |
+| **`ImportError: DLL load failed while importing _gdal`** | PROJ or GDAL library path conflict. | Ensure you are executing from `.venv` (`HydroMT-SFINCS`) and Cell 2 of the notebook was run. |
 | **`Out of Memory / RAM spikes during mesh build`** | High-resolution FABDEM raster tiling during 10m subgrid extraction. | Ensure at least 8 GB of free RAM; close unnecessary browser tabs or background applications. |

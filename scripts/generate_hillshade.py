@@ -24,15 +24,11 @@ import pyproj
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Fix PROJ and GDAL paths for Windows execution
-proj_dir = os.path.abspath(r".\env-sfincs\Lib\site-packages\rasterio\proj_data")
-gdal_dir = os.path.abspath(r".\env-sfincs\Lib\site-packages\rasterio\gdal_data")
-if os.path.exists(proj_dir):
-    os.environ["PROJ_DATA"] = proj_dir
-    os.environ["PROJ_LIB"] = proj_dir
-    pyproj.datadir.set_data_dir(proj_dir)
-if os.path.exists(gdal_dir):
-    os.environ["GDAL_DATA"] = gdal_dir
+# Centralized PROJ/GDAL/DLL initialization
+script_dir = Path(__file__).resolve().parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+import _env  # noqa: F401
 
 os.environ["GDAL_NUM_THREADS"] = "ALL_CPUS"
 

@@ -4,10 +4,13 @@ Author: Senior Geospatial Intelligence Expert
 Project: West Sumatra Flood Hazard Mapping (SFINCS Ground Truth)
 """
 
+import argparse
 import os
 import sqlite3
+from pathlib import Path
 
-def create_survey_gpkg(output_path="d:/Project/sumbar_flood_hazard/data/survey_flood_ground_truth.gpkg"):
+def create_survey_gpkg(output_path="data/survey_flood_ground_truth.gpkg"):
+    output_path = str(Path(output_path).resolve())
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     if os.path.exists(output_path):
         os.remove(output_path)
@@ -109,4 +112,7 @@ def create_survey_gpkg(output_path="d:/Project/sumbar_flood_hazard/data/survey_f
     print(f"Successfully generated OGC GeoPackage at: {output_path}")
 
 if __name__ == "__main__":
-    create_survey_gpkg()
+    parser = argparse.ArgumentParser(description="Create standardized QField Flood Hazard Ground Truth GeoPackage.")
+    parser.add_argument("--out", default="data/survey_flood_ground_truth.gpkg", help="Output GeoPackage path")
+    args = parser.parse_args()
+    create_survey_gpkg(args.out)

@@ -11,21 +11,17 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "[1/4] astral-sh/uv is already installed." -ForegroundColor Green
 }
 
-# 2. Create virtual environment
-if (-not (Test-Path ".\env-sfincs")) {
-    Write-Host "[2/4] Creating virtual environment env-sfincs with Python 3.12..." -ForegroundColor Yellow
-    uv venv env-sfincs --python 3.12
-} else {
-    Write-Host "[2/4] Virtual environment env-sfincs already exists." -ForegroundColor Green
-}
+# 2. Provision unified virtual environment (.venv) from pyproject.toml + uv.lock
+Write-Host "[2/4] Syncing unified virtual environment (.venv) via uv sync..." -ForegroundColor Yellow
+uv sync --extra dev
 
-# 3. Install dependencies
-Write-Host "[3/4] Installing HydroMT-SFINCS and geospatial dependencies..." -ForegroundColor Yellow
-uv pip install -r env/requirements.txt --python env-sfincs\Scripts\python.exe
+# 3. Verify core geospatial imports
+Write-Host "[3/4] Verifying HydroMT-SFINCS installation..." -ForegroundColor Yellow
+& ".\.venv\Scripts\python.exe" -c "import hydromt, hydromt_sfincs, geopandas, rasterio; print(f'OK: hydromt={hydromt.__version__}, hydromt_sfincs={hydromt_sfincs.__version__}')"
 
 # 4. Register Jupyter Kernel
 Write-Host "[4/4] Registering Jupyter Kernel 'HydroMT-SFINCS'..." -ForegroundColor Yellow
-& ".\env-sfincs\Scripts\python.exe" -m ipykernel install --user --name hydromt-sfincs --display-name "HydroMT-SFINCS"
+& ".\.venv\Scripts\python.exe" -m ipykernel install --user --name hydromt-sfincs --display-name "HydroMT-SFINCS"
 
 # 5. Windows 11 Compatibility: Unblock binaries and verify runtime
 if (Test-Path ".\bin") {

@@ -14,14 +14,17 @@ Use this skill whenever:
 
 ## 1. Quick PowerShell Execution
 
-Execute the workspace storage cleaner script using `uv`:
+Execute the workspace storage cleaner script using the pinned `.venv` interpreter:
 
 ```powershell
-# Perform audit and cleanup
-uv run python scripts/clean_storage.py
-
 # Perform dry-run audit without deleting
-uv run python scripts/clean_storage.py --dry-run
+.\.venv\Scripts\python.exe scripts/clean_storage.py --dry-run --include-temp-chips --include-user-temp
+
+# Perform standard cache cleanup (bytecode, checkpoints, stray logs)
+.\.venv\Scripts\python.exe scripts/clean_storage.py
+
+# Also purge cached per-DAS DEM chips and Windows %TEMP% geospatial dumps
+.\.venv\Scripts\python.exe scripts/clean_storage.py --include-temp-chips --include-user-temp
 ```
 
 ---
@@ -50,7 +53,7 @@ uv cache prune
 | :--- | :--- | :--- |
 | **`C:\Users\...\AppData\Local\Temp\`** | `tmp*.tif`, `gdal*`, `rasterio*`, `dask*`, `*.nc`, `*.parquet`, `*.gpkg` temp dumps | Non-geospatial Windows system files |
 | **`C:\Users\...\AppData\Local\uv\cache\`** | Downloaded wheel archives & staging builds | Pinned virtual environment (`.venv/`) |
-| **Workspace Root (`fhm_master`)** | `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.ipynb_checkpoints` | Case inputs, configuration templates, raw/interim datasets, models, outputs |
+| **Workspace Root (`sumbar_flood_hazard`)** | `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.ipynb_checkpoints`, stray `*.log`, optional `temp/chips/` | Raw inputs (`data_raw/`), analysis-ready `data/`, configs, `outputs/` |
 
 ---
 

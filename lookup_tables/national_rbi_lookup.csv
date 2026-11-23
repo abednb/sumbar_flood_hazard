@@ -1,0 +1,17 @@
+class_id,canonical_class,N,cn_hsg_a,cn_hsg_b,cn_hsg_c,cn_hsg_d,description
+0,nodata_unclassified,0.040,60,73,82,87,Default unclassified surface (Chow 1959; USDA-NRCS TR-55)
+1,sea,0.020,100,100,100,100,Open sea / coastal waters
+2,inland_water,0.025,100,100,100,100,Rivers lakes reservoirs ponds canals
+3,paved_transport,0.015,98,98,98,98,Runways paved roads ports impervious transport
+4,built_up_urban,0.120,77,85,90,92,Settlements buildings urban commercial macro-roughness (Chow 1959)
+5,bare_sand_mining,0.030,77,86,91,94,Bare ground sand beaches quarries mining sites
+6,grassland_open,0.035,39,61,74,80,Grassland open fields cemeteries recreation grounds
+7,paddy_sawah,0.040,78,84,88,91,Irrigated and rainfed lowland paddy rice fields (Sawah)
+8,dryland_cropland,0.045,67,78,85,89,Dryland agriculture (Tegalan/Ladang)
+9,agroforest_mixed,0.055,45,66,77,83,Mixed crops community agroforest (Tanaman Campur/Hutan Rakyat)
+10,plantation,0.060,45,66,77,83,Tree crop estates and smallholder plantations (Perkebunan)
+11,shrubland,0.070,48,67,77,83,Shrubs secondary brush (Semak Belukar)
+12,marsh_swamp,0.080,80,85,90,92,Freshwater marsh and herbaceous wetlands (Rawa)
+13,peat_swamp_forest,0.100,80,85,90,92,Peat swamp forest (Hutan Rawa/Gambut)
+14,dense_forest,0.120,30,55,70,77,Primary and secondary tropical rainforest (Hutan Rimba)
+15,mangrove,0.140,85,89,92,94,Coastal mangrove forest (Hutan Bakau/Mangrove)

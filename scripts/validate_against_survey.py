@@ -32,9 +32,10 @@ import _env
 
 def load_all_survey_points(
     survey_dirs: list[str] = ["data/qfield_result", "data"],
-    target_crs: str = "EPSG:32747",
+    target_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
-    """Loads and aggregates all survey ground truth GeoPackage files."""
+    """Loads and aggregates all survey ground truth GeoPackage files into target_crs (defaults to EPSG:4326)."""
+    crs_out = target_crs or "EPSG:4326"
     gdfs = []
     for s_dir in survey_dirs:
         for f in glob.glob(f"{s_dir}/*.gpkg"):
@@ -43,16 +44,16 @@ def load_all_survey_points(
                 try:
                     gdf = gpd.read_file(f)
                     if not gdf.empty and gdf.geometry.notna().any():
-                        if str(gdf.crs) != target_crs:
-                            gdf = gdf.to_crs(target_crs)
+                        if str(gdf.crs) != str(crs_out):
+                            gdf = gdf.to_crs(crs_out)
                         gdfs.append(gdf)
                 except Exception:
                     pass
 
     if not gdfs:
-        return gpd.GeoDataFrame(geometry=[], crs=target_crs)
+        return gpd.GeoDataFrame(geometry=[], crs=crs_out)
 
-    combined = gpd.GeoDataFrame(pd_concat(gdfs), crs=target_crs)
+    combined = gpd.GeoDataFrame(pd_concat(gdfs), crs=crs_out)
     return combined
 
 
@@ -64,22 +65,20 @@ def pd_concat(gdfs):
 def validate_flood_map(
     depth_tif: str,
     das_geom_gpkg: Optional[str] = None,
+    das_id: Optional[str] = None,
     survey_gpkg: Optional[str] = None,
     hmin: float = 0.05,
+    max_valid_depth_m: float = 8.0,
     out_json: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Validates a modeled flood depth raster against survey observations.
+    Filters to a specific das_id when das_geom_gpkg contains multiple clusters,
+    and quarantines physically implausible survey depth outliers (> max_valid_depth_m).
     """
     depth_path = Path(depth_tif).resolve()
     if not depth_path.exists():
         raise FileNotFoundError(f"Flood depth raster not found at {depth_path}")
-
-    # Load survey points
-    if survey_gpkg and Path(survey_gpkg).exists():
-        survey_gdf = gpd.read_file(survey_gpkg)
-    else:
-        survey_gdf = load_all_survey_points()
 
     with rasterio.open(depth_path) as src:
         raster_crs = src.crs
@@ -87,12 +86,21 @@ def validate_flood_map(
         depth_arr = src.read(1)
         nodata = src.nodata
 
-    if str(survey_gdf.crs) != str(raster_crs):
-        survey_gdf = survey_gdf.to_crs(raster_crs)
+    # Load survey points directly into raster CRS (works for any Indonesian UTM zone)
+    if survey_gpkg and Path(survey_gpkg).exists():
+        survey_gdf = gpd.read_file(survey_gpkg)
+        if str(survey_gdf.crs) != str(raster_crs):
+            survey_gdf = survey_gdf.to_crs(raster_crs)
+    else:
+        survey_gdf = load_all_survey_points(target_crs=str(raster_crs))
 
-    # Filter to catchment boundary if provided
+    # Filter to catchment boundary if provided (narrowing to das_id if multi-cluster file)
     if das_geom_gpkg and Path(das_geom_gpkg).exists():
-        das_gdf = gpd.read_file(das_geom_gpkg).to_crs(raster_crs)
+        das_gdf = gpd.read_file(das_geom_gpkg)
+        if das_id is not None and len(das_gdf) > 1:
+            from sfincs_standalone_pipeline import find_cluster_geometry
+            das_gdf, _ = find_cluster_geometry(das_gdf, das_id)
+        das_gdf = das_gdf.to_crs(raster_crs)
         union_geom = das_gdf.geometry.union_all() if hasattr(das_gdf.geometry, "union_all") else das_gdf.geometry.unary_union
         survey_gdf = survey_gdf[survey_gdf.intersects(union_geom)].copy()
 
@@ -101,8 +109,6 @@ def validate_flood_map(
         result = {
             "survey_points_count": 0,
             "message": "No survey ground truth points located within the model domain.",
-            "fitted_depth_scale": 1.0,
-            "fitted_depth_offset": 0.0,
         }
         if out_json:
             Path(out_json).parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +127,7 @@ def validate_flood_map(
     if nodata is not None:
         sampled_depths = np.where(sampled_depths == nodata, np.nan, sampled_depths)
 
-    # Extract observed depths
+    # Extract observed depths & quarantine physically implausible outliers (e.g., cm/mm entry typos)
     obs_col = None
     for cand in ["water_depth_cm", "depth_cm", "water_depth", "depth_m", "depth"]:
         if cand in survey_gdf.columns:
@@ -129,15 +135,20 @@ def validate_flood_map(
             break
 
     obs_depths_m = []
+    outliers_excluded = 0
     if obs_col:
         for val in survey_gdf[obs_col]:
             try:
                 v = float(val)
-                # If values are in cm (typically > 5 for moderate floods), convert to meters
                 if "cm" in obs_col.lower() or v > 10.0:
-                    obs_depths_m.append(v / 100.0)
+                    d_m = v / 100.0
                 else:
-                    obs_depths_m.append(v)
+                    d_m = v
+                if not np.isfinite(d_m) or d_m < 0.0 or d_m > max_valid_depth_m:
+                    outliers_excluded += 1
+                    obs_depths_m.append(np.nan)
+                else:
+                    obs_depths_m.append(d_m)
             except (ValueError, TypeError):
                 obs_depths_m.append(np.nan)
     else:
@@ -146,44 +157,36 @@ def validate_flood_map(
 
     obs_depths_m = np.array(obs_depths_m)
 
-    # Contingency evaluation
-    # Flooded: depth >= hmin
-    pred_flooded = (sampled_depths >= hmin) & np.isfinite(sampled_depths)
-    obs_flooded = (obs_depths_m >= hmin) & np.isfinite(obs_depths_m)
+    # Contingency evaluation (exclude points with quarantined/NaN observed depths)
+    valid_obs = np.isfinite(obs_depths_m)
+    pred_flooded = (sampled_depths >= hmin) & np.isfinite(sampled_depths) & valid_obs
+    obs_flooded = (obs_depths_m >= hmin) & valid_obs
 
     hits = int(np.sum(pred_flooded & obs_flooded))
     misses = int(np.sum((~pred_flooded) & obs_flooded))
-    false_alarms = int(np.sum(pred_flooded & (~obs_flooded)))
-    correct_rejections = int(np.sum((~pred_flooded) & (~obs_flooded)))
+    false_alarms = int(np.sum(pred_flooded & (~obs_flooded) & valid_obs))
+    correct_rejections = int(np.sum((~pred_flooded) & (~obs_flooded) & valid_obs))
 
     pod = hits / max(hits + misses, 1)
     far = false_alarms / max(hits + false_alarms, 1)
     csi = hits / max(hits + misses + false_alarms, 1)
 
     # Depth accuracy for points where both observed and modeled are valid & wet
-    valid_pair = np.isfinite(sampled_depths) & np.isfinite(obs_depths_m) & (obs_depths_m > 0)
+    valid_pair = np.isfinite(sampled_depths) & valid_obs & (obs_depths_m > 0)
     if np.sum(valid_pair) >= 3:
         p_wet = sampled_depths[valid_pair]
         o_wet = obs_depths_m[valid_pair]
         bias = float(np.mean(p_wet - o_wet))
         rmse = float(np.sqrt(np.mean((p_wet - o_wet) ** 2)))
-
-        # Fit least squares calibration: o = alpha * p + beta
-        try:
-            poly = np.polyfit(p_wet, o_wet, 1)
-            depth_scale = round(float(poly[0]), 4)
-            depth_offset = round(float(poly[1]), 4)
-        except Exception:
-            depth_scale = 1.0
-            depth_offset = 0.0
     else:
         bias = 0.0
         rmse = 0.0
-        depth_scale = 1.0
-        depth_offset = 0.0
 
     result = {
-        "survey_points_evaluated": total_pts,
+        "survey_points_evaluated": int(np.sum(valid_obs)),
+        "survey_points_total": total_pts,
+        "outliers_excluded": outliers_excluded,
+        "max_valid_depth_m": max_valid_depth_m,
         "contingency": {
             "hits": hits,
             "misses": misses,
@@ -195,11 +198,13 @@ def validate_flood_map(
         "critical_success_index_csi": round(csi, 4),
         "depth_rmse_m": round(rmse, 4),
         "depth_bias_m": round(bias, 4),
-        "fitted_depth_scale": depth_scale,
-        "fitted_depth_offset": depth_offset,
     }
 
-    print(f"[SURVEY VALIDATION] Evaluated {total_pts} points: Hits={hits}, Misses={misses}, POD={pod:.2f}, CSI={csi:.2f}, RMSE={rmse:.2f}m")
+    print(
+        f"[SURVEY VALIDATION] Evaluated {int(np.sum(valid_obs))}/{total_pts} points "
+        f"(excluded {outliers_excluded} outliers > {max_valid_depth_m}m): "
+        f"Hits={hits}, Misses={misses}, POD={pod:.2f}, CSI={csi:.2f}, RMSE={rmse:.2f}m"
+    )
     if out_json:
         out_p = Path(out_json)
         out_p.parent.mkdir(parents=True, exist_ok=True)
@@ -219,12 +224,12 @@ def validate_model_against_survey(
     survey_path: Optional[str] = None,
     survey_gpkg: Optional[str] = None,
     hmin: float = 0.05,
+    max_valid_depth_m: float = 8.0,
     out_json: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convenience wrapper for pipeline & notebook calls."""
     if depth_tif is None and hazard_dir is not None:
         hdir = Path(hazard_dir)
-        # Search for new format *Flood_Depth.tif or legacy *flood_depth*.tif, excluding raw/display
         all_candidates = (
             list(hdir.glob("*Flood_Depth.tif"))
             + list(hdir.glob("*flood_depth*.tif"))
@@ -246,13 +251,15 @@ def validate_model_against_survey(
     das_geom = das_geom_gpkg or das_clusters_path
     survey_file = survey_gpkg or survey_path
     if survey_file and Path(survey_file).is_dir():
-        survey_file = None  # let validate_flood_map load from dir
+        survey_file = None
 
     return validate_flood_map(
         depth_tif=str(depth_tif),
         das_geom_gpkg=str(das_geom) if das_geom else None,
+        das_id=das_id,
         survey_gpkg=str(survey_file) if survey_file else None,
         hmin=hmin,
+        max_valid_depth_m=max_valid_depth_m,
         out_json=out_json,
     )
 

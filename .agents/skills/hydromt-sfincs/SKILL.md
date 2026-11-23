@@ -44,17 +44,20 @@ model_root = build_sfincs_standalone(
 )
 ```
 
-**Underlying Physics & QA Gates**:
-- **Subgrid Hypsometry**: 40 m computational flux mesh with 10 m subgrid elevation tables derived from FABDEM (30 m native, bilinearly resampled to 10 m).
-- **Manning Roughness**: Integer-coded BIG RBI land cover (`data/landcover_rbi.tif`) with lookup table `lookup_tables/manning_lookup.csv` (Chow 1959 / Arcement & Schneider 1989).
-- **River Burning**: River centerlines burned into subgrid hypsometry (`datasets_riv`) with hydraulic geometry (`rivwth`, `rivdph`, `manning=0.030`).
-- **Boundary Conditioning**: Waterlevel boundary cells (`msk=2`) at sea level ($z \le 0$), and outflow boundary cells (`msk=3`) at inland catchment outlets.
-- **Build-Time QA**: Verifies non-uniform roughness (`std > 0`) and boundary existence (`count(msk=2) + count(msk=3) > 0`).
+**Underlying Physics & QA Gates (National v2.0 Standard)**:
+- **Indonesian Auto-UTM**: Automatic UTM zone detection (`EPSG:32646–32754` via `scripts/geo_utils.py`).
+- **Active Watershed Mask**: Strictly bounded to `das_region` (`setup_mask_active: mask: das_region, reset_mask: true`) so outside-basin and ocean cells remain inactive (`msk=0`) and inland outlets receive `msk=3`.
+- **Subgrid Hypsometry**: 40 m (or 80 m fast mode) computational flux mesh with 10 m subgrid elevation tables derived from native 30 m FABDEM via on-the-fly `WarpedVRT`.
+- **Manning Roughness**: Integer-coded BIG RBI land cover (`data/landcover_rbi.tif`) with `lookup_tables/manning_lookup.csv` & canonical 15-class `lookup_tables/national_rbi_lookup.csv`.
+- **Silted River Burning**: River centerlines enhanced with BIG RBI polygon river widths (`data/rivers_ar.gpkg`) burned into subgrid hypsometry (`rivwth: 8/15/22 m`, `rivdph: 0.35/0.55/0.80 m`, `manning=0.045`).
+- **CNB Infiltration**: SFINCS `v2.4.0+` Curve Number with Recovery (`smaxfile`/`sefffile`/`ksfile` in meters from `data/cn_amc2_100m.tif` & `data/cn_amc3_100m.tif`; NEVER use legacy `scsfile` in `v2.4.0`!).
+- **Boundary Conditioning**: Coastal waterlevel boundaries (`msk=2`) forced with MHHW (`+0.80 m`) via native `sfincs.bnd`/`sfincs.bzs`, and inland outflow boundaries (`msk=3`) snapped to lowest-elevation catchment outlets.
+- **Build-Time & Subgrid QA**: Verifies non-uniform roughness, masked domain, boundary presence, depth peak timing, and exact subgrid hypsometric storage volume (`sfincs_subgrid.nc`).
 
 ---
 
 ### Step 2: Extended Recession Direct Rainfall Forcing
-Apply 24-hour design storm hyetographs padded with explicit zero-intensity recession timesteps (total duration 72 hours):
+Apply 24-hour design storm hyetographs padded with explicit zero-intensity recession timesteps (default 48 hours = 24 h storm + 24 h recession; extend to 72 h for large basins):
 
 ```python
 from scripts.sfincs_standalone_pipeline import prepare_sfincs_direct_rain_forcing
@@ -65,7 +68,12 @@ prepare_sfincs_direct_rain_forcing(
     base_model_dir="models_sfincs_standalone",
     rainfall_dir="data/rainfall",
     storm_hours=24,
-    recession_hours=48,
+    recession_hours=None,       # Auto-scales by basin area (24h / 36h / 48h)
+    infiltration_mode="cnb",    # USDA-NRCS smax/seff/ks (never legacy scsfile in v2.4.0)
+    coastal_mhhw_m=0.80,        # Coastal MHHW tidal backwater on msk=2 cells
+    alpha=0.65,
+    huthresh=0.02,
+    viscosity=0,
     tref="20240101 000000",
     tstart="20240101 000000",
 )
@@ -75,9 +83,9 @@ prepare_sfincs_direct_rain_forcing(
 - Rainfall CRS detected from NetCDF coordinates (EPSG:4326).
 - Bounding box checked to cover the active model domain.
 - Active cells checked for NaN (raises error if missing) and zero total.
-- Explicit zeros padded up to `tstop` (72 h) to prevent constant-tail rain holding.
+- Explicit zeros padded up to `tstop` to prevent constant-tail rain holding.
 - Forcing volume conservation check: domain-mean padded rainfall matches design depth within $\pm 1\%$.
-- `dtmaxout` configured to 72 h so peak water levels (`zsmax`) encompass both storm peak and downstream floodplain recession.
+- `dtmaxout` configured to full simulation length so peak water levels (`zsmax`) encompass both storm peak and downstream floodplain recession.
 
 ---
 
@@ -97,8 +105,8 @@ run_sfincs_model(
 
 ---
 
-### Step 4: Downscaling, Depth Reconstruction & BNPB Classification
-Downscale water surface elevations ($z_s$) to the 10 m topography, reconstruct physical depth ($z_s - z_{\text{DEM}}$), and classify according to Perka BNPB No. 02/2012:
+### Step 4: Option B Natural Hydrostatic Downscaling & BNPB Classification
+Downscale water surface elevations ($z_s$) to 10 m topography, apply **Option B Hydrostatically Connected Natural Floodplain Margin (`+0.25 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 80 m`)** + **4-connected `30 m × 30 m` (`0.09 ha`) pinhole/speck floor**, and classify according to Perka BNPB No. 02/2012:
 
 ```python
 from scripts.sfincs_standalone_pipeline import postprocess_sfincs_hazard
@@ -107,14 +115,18 @@ postprocess_sfincs_hazard(
     das_id="DAS_101",
     rp="rp100",
     base_model_dir="models_sfincs_standalone",
-    output_maps_dir="outputs_standalone",
+    output_maps_dir="outputs",
     hmin=0.05,
-    hole_mmu_px=50,
-    island_mmu_px=50,
+    freeboard_m=0.25,
+    max_ext_dist_m=80.0,
+    max_ext_slope_deg=5.0,
+    hole_mmu_ha=2.0,
+    island_mmu_ha=0.09,
+    min_hole_ha=0.09,
+    bridge_radius=5,
+    smooth_sigma=1.2,
     cosmetic=False,
     classification_method="depth",
-    low_thresh=0.76,
-    high_thresh=1.50,
 )
 ```
 
@@ -125,12 +137,12 @@ postprocess_sfincs_hazard(
 - **Class 3 (Tinggi / High Hazard)**: $h > 1.50\text{ m}$
 
 **Artifact Outputs**:
-- `outputs_standalone/<DAS>/<rp>/flood_depth_10m_raw.tif`: Direct downscaled depth before filtering.
-- `outputs_standalone/<DAS>/<rp>/flood_depth_10m.tif`: Physically reconstructed flood depth (wet only if $z_s - z_{\text{DEM}} \ge h_{\text{min}}$).
-- `outputs_standalone/<DAS>/<rp>/hazard_class_perka2012.tif`: 3-class BNPB disaster hazard level.
-- `outputs_standalone/<DAS>/<rp>/flood_hazard_index.tif`: Continuous Fuzzy Large Flood Hazard Index ($0.0 - 1.0$).
-- `outputs_standalone/<DAS>/<rp>/qa_report.json`: QA check outputs (roughness, boundaries, peak timing, volume balance).
-- `outputs_standalone/<DAS>/<rp>/survey_validation.json`: QField ground truth contingency and RMSE metrics.
+- `outputs/<DAS>/<rp>/<DAS_TAG>_<RP_TAG>_Flood_Depth_raw.tif`: Direct downscaled depth before filtering.
+- `outputs/<DAS>/<rp>/<DAS_TAG>_<RP_TAG>_Flood_Depth.tif`: Hydrostatically reconstructed flood depth (wet only where $z_s > z_{\text{DEM}}$).
+- `outputs/<DAS>/<rp>/<DAS_TAG>_<RP_TAG>_FloodHazard_Classes.tif`: 3-class BNPB disaster hazard level (with companion `.qml`).
+- `outputs/<DAS>/<rp>/<DAS_TAG>_<RP_TAG>_FloodHazard_Index.tif`: Continuous Fuzzy Large Flood Hazard Index ($0.0 - 1.0$, with companion `.qml`).
+- `outputs/<DAS>/<rp>/qa_report.json`: QA check outputs (roughness, active mask & boundaries, depth-based peak timing, storage volume balance).
+- `outputs/<DAS>/<rp>/survey_validation.json`: QField ground truth contingency and outlier-filtered RMSE metrics.
 
 ---
 
@@ -144,7 +156,7 @@ create_sfincs_flood_animation(
     das_id="DAS_101",
     rp="rp100",
     base_model_dir="models_sfincs_standalone",
-    output_maps_dir="outputs_standalone",
+    output_maps_dir="outputs",
     fps=2,
     hmin=0.05,
     vmax=3.0,

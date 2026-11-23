@@ -143,7 +143,7 @@ Executed automatically for every cluster run:
 ### 6.3 Ground-Truth Field Survey Validation (`scripts/validate_against_survey.py`)
 Directly verifies modeled inundation depth and hazard extent against 123 field points in `data/qfield_result/`:
 * Calculates Probability of Detection (POD / Hit Rate), False Alarm Ratio (FAR), Critical Success Index (CSI / Threat Score), Depth Mean Bias, and Root Mean Square Error (RMSE).
-* Saves results to `outputs_standalone/<DAS>/<rp>/survey_validation.json`.
+* Saves results to `outputs/<DAS>/<rp>/survey_validation.json`.
 
 ---
 

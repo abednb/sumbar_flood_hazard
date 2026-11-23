@@ -97,24 +97,33 @@ def check_boundaries(model_dir: Path) -> Dict[str, Any]:
 
     if nmax > 0 and mmax > 0:
         msk = np.fromfile(msk_bin, dtype=np.int8)
-        if msk.size == nmax * mmax:
-            msk = msk.reshape((mmax, nmax))
+        total_cells = nmax * mmax
+        if msk.size == total_cells:
+            num_inactive = int(np.sum(msk == 0))
+        else:
+            # SFINCS binary format ('inputformat = bin') stores only non-zero indexed cells
+            # matching sfincs.ind; remaining cells in the mmax x nmax grid are inactive (msk=0).
+            num_inactive = int(np.sum(msk == 0)) + max(total_cells - int(msk.size), 0)
     else:
-        # Fallback to direct reading
         msk = np.fromfile(msk_bin, dtype=np.int8)
+        total_cells = max(int(msk.size), 1)
+        num_inactive = int(np.sum(msk == 0))
 
-    num_inactive = int(np.sum(msk == 0))
     num_active = int(np.sum(msk == 1))
     num_waterlevel = int(np.sum(msk == 2))
     num_outflow = int(np.sum(msk == 3))
+    inactive_pct = round((num_inactive / max(total_cells, 1)) * 100.0, 2)
 
     has_boundaries = (num_waterlevel + num_outflow) > 0
+    domain_masked = num_inactive > 0
     result = {
-        "passed": has_boundaries,
+        "passed": has_boundaries and domain_masked,
         "active_cells_msk1": num_active,
         "waterlevel_cells_msk2": num_waterlevel,
         "outflow_cells_msk3": num_outflow,
         "inactive_cells_msk0": num_inactive,
+        "inactive_fraction_pct": inactive_pct,
+        "domain_masked": domain_masked,
     }
 
     if not has_boundaries:
@@ -122,48 +131,80 @@ def check_boundaries(model_dir: Path) -> Dict[str, Any]:
             f"Boundary QA Failed in {model_dir}: No boundary cells found! "
             f"(msk=2: {num_waterlevel}, msk=3: {num_outflow}). Catchment will trap all flood water."
         )
+    if not domain_masked:
+        print(
+            f"[QA WARNING] Unmasked rectangular grid detected in {model_dir} (msk0=0)! "
+            f"Set 'mask: das_region' in setup_mask_active to skip outside-basin cells and enable msk=3 outlets."
+        )
 
-    print(f"[QA PASS] Boundary cells present: active={num_active}, waterlevel={num_waterlevel}, outflow={num_outflow}")
+    print(
+        f"[QA {'PASS' if result['passed'] else 'WARN'}] Mask & boundaries: "
+        f"active={num_active:,}, inactive={num_inactive:,} ({inactive_pct:.1f}%), "
+        f"waterlevel={num_waterlevel:,}, outflow={num_outflow:,}"
+    )
     return result
 
 
-def check_peak_timing(model_dir: Path, threshold_pct: float = 1.0) -> Dict[str, Any]:
+def _extract_depth_timeseries(ds: xr.Dataset) -> Optional[xr.DataArray]:
+    """
+    Returns water depth time series h(time, y, x) in meters from sfincs_map.nc.
+    Computes h = max(zs - zb, 0) when SFINCS outputs water surface elevation (zs) and bed level (zb)
+    rather than explicit depth (h).
+    """
+    if "h" in ds.data_vars:
+        return ds["h"]
+    if "zs" in ds.data_vars and "zb" in ds.data_vars:
+        zs = ds["zs"]
+        zb = ds["zb"]
+        h = (zs - zb).where(np.isfinite(zs) & np.isfinite(zb))
+        return h.clip(min=0.0)
+    if "zs" in ds.data_vars:
+        return ds["zs"]
+    return None
+
+
+def check_peak_timing(model_dir: Path, threshold_pct: float = 1.0, hmin: float = 0.05) -> Dict[str, Any]:
     """
     Run-time QA (Issue C2):
-    Analyzes sfincs_map.nc water elevation (zs) time series.
-    Reports the fraction of wet cells whose peak inundation occurs in the last 10% of simulation time.
-    Warns if fraction > threshold_pct (run duration is too short for recession).
+    Analyzes sfincs_map.nc water depth h = zs - zb time series.
+    Reports the fraction of wet cells (max h >= hmin) whose peak inundation occurs
+    in the last 10% of simulation time.
     """
     map_nc = model_dir / "sfincs_map.nc"
     if not map_nc.exists():
         raise FileNotFoundError(f"Results file sfincs_map.nc not found in {model_dir}")
 
-    ds = xr.open_dataset(map_nc)
-    if "zs" not in ds.data_vars and "h" not in ds.data_vars:
-        return {"passed": True, "warning": "Neither zs nor h time series found in map output."}
+    with xr.open_dataset(map_nc) as ds:
+        da = _extract_depth_timeseries(ds)
+        if da is None:
+            return {"passed": True, "warning": "Neither h nor zs time series found in map output."}
 
-    var = "zs" if "zs" in ds.data_vars else "h"
-    da = ds[var]
-    num_steps = da.sizes["time"]
+        num_steps = int(da.sizes["time"])
+        if num_steps < 3:
+            return {"passed": True, "note": "Insufficient timesteps to evaluate peak timing."}
 
-    if num_steps < 3:
-        return {"passed": True, "note": "Insufficient timesteps to evaluate peak timing."}
+        # Mask out inactive cells (msk == 0) if mask is stored in map output
+        active_grid_mask = None
+        if "msk" in ds.data_vars:
+            active_grid_mask = (ds["msk"].values == 1)
 
-    # Find time index of peak for each cell (fill NaNs to avoid all-NaN slice errors on dry cells)
-    da_filled = da.fillna(-9999.0)
-    peak_idx = da_filled.argmax(dim="time").values
-    # Max value over time to filter dry cells
-    max_val = da.max(dim="time").values
+        da_vals = da.values
+        # Replace NaNs with -9999 before argmax so dry cells do not raise
+        da_filled = np.where(np.isfinite(da_vals), da_vals, -9999.0)
+        peak_idx = np.argmax(da_filled, axis=0)
+        max_val = np.max(da_filled, axis=0)
 
-    wet_mask = np.isfinite(max_val) & (max_val > 0.05)
-    total_wet = int(np.sum(wet_mask))
+        wet_mask = (max_val >= hmin)
+        if active_grid_mask is not None and active_grid_mask.shape == wet_mask.shape:
+            wet_mask &= active_grid_mask
 
-    if total_wet == 0:
-        return {"passed": True, "note": "No flooded cells detected."}
+        total_wet = int(np.sum(wet_mask))
+        if total_wet == 0:
+            return {"passed": True, "note": "No flooded cells detected."}
 
-    cutoff_step = int(np.floor(0.90 * num_steps))
-    late_peaking_cells = int(np.sum(wet_mask & (peak_idx >= cutoff_step)))
-    late_fraction_pct = (late_peaking_cells / total_wet) * 100.0
+        cutoff_step = int(np.floor(0.90 * num_steps))
+        late_peaking_cells = int(np.sum(wet_mask & (peak_idx >= cutoff_step)))
+        late_fraction_pct = (late_peaking_cells / total_wet) * 100.0
 
     passed = late_fraction_pct <= threshold_pct
     result = {
@@ -184,66 +225,171 @@ def check_peak_timing(model_dir: Path, threshold_pct: float = 1.0) -> Dict[str, 
     return result
 
 
+def _compute_subgrid_storage_volume(
+    model_dir: Path,
+    ds_map: xr.Dataset,
+    cell_area: float,
+    active_mask: Optional[np.ndarray],
+) -> Tuple[float, str]:
+    """
+    Computes exact final surface water storage volume [m³] using the SFINCS subgrid hypsometric
+    lookup table (`sfincs_subgrid.nc`: z_zmin, z_zmax, z_volmax, z_level) when available.
+    Falls back cleanly to regular-grid `(zs - zb) * cell_area` if subgrid tables are absent.
+
+    Why this matters: In subgrid mode, `sfincs_map.nc['zb']` stores `z_zmin` (the lowest 10 m
+    pixel inside each coarse cell). Multiplying `(zs - z_zmin) * cell_area` on steep mountain
+    basins (e.g. DAS_101) overestimates storage by 2x-5x. Evaluating the true hypsometric curve
+    closes mass balance accurately across both coastal plains and mountainous watersheds.
+    """
+    sbg_candidates = [
+        model_dir / "sfincs_subgrid.nc",
+        model_dir / "subgrid" / "sfincs_subgrid.nc",
+    ]
+    sbg_nc = next((p for p in sbg_candidates if p.exists()), None)
+    ind_bin = model_dir / "sfincs.ind"
+
+    if sbg_nc is not None and ind_bin.exists() and "zs" in ds_map.data_vars:
+        try:
+            with xr.open_dataset(sbg_nc) as sbg:
+                if all(k in sbg.data_vars for k in ("z_zmin", "z_zmax", "z_volmax", "z_level")):
+                    zs_end = ds_map["zs"].isel(time=-1).values
+                    # SFINCS binary index file (1-based Fortran linear index in column-major (n, m) or (m, n))
+                    ind = np.fromfile(ind_bin, dtype=np.int32)
+                    # Skip optional Fortran record header if present (ind[0] == number of active points)
+                    if ind.size > 0 and ind[0] == ind.size - 1:
+                        ind = ind[1:]
+                    z_zmin = sbg["z_zmin"].values
+                    z_zmax = sbg["z_zmax"].values
+                    z_volmax = sbg["z_volmax"].values
+                    z_level = sbg["z_level"].values  # shape (np, n_levels) or (n_levels, np)
+                    if z_level.shape[0] != z_zmin.shape[0] and z_level.shape[1] == z_zmin.shape[0]:
+                        z_level = z_level.T
+
+                    if ind.size == z_zmin.size:
+                        # Map 2D zs_end (n, m) onto 1D active-point vector matching sfincs.ind (Fortran order)
+                        zs_flat = zs_end.ravel(order="F")
+                        valid_idx = (ind >= 1) & (ind <= zs_flat.size)
+                        if np.all(valid_idx):
+                            zs_p = zs_flat[ind - 1]
+                            msk_p = None
+                            if "msk" in ds_map.data_vars:
+                                msk_p = ds_map["msk"].values.ravel(order="F")[ind - 1]
+
+                            wet_p = np.isfinite(zs_p) & np.isfinite(z_zmin) & (zs_p > z_zmin + 0.01)
+                            if msk_p is not None:
+                                wet_p &= (msk_p == 1)
+
+                            if not np.any(wet_p):
+                                return 0.0, "subgrid_hypsometric"
+
+                            zs_w = zs_p[wet_p]
+                            zmin_w = z_zmin[wet_p]
+                            zmax_w = z_zmax[wet_p]
+                            vmax_w = z_volmax[wet_p]
+                            lvl_w = z_level[wet_p, :]  # (nw, L)
+
+                            vols = np.zeros_like(zs_w, dtype=np.float64)
+                            above = zs_w >= zmax_w
+                            vols[above] = vmax_w[above] + (zs_w[above] - zmax_w[above]) * cell_area
+
+                            mid = ~above
+                            if np.any(mid):
+                                n_lvl = lvl_w.shape[1]
+                                zm = zs_w[mid][:, None]
+                                lm = lvl_w[mid, :]
+                                # Count how many subgrid level thresholds are below zs_w
+                                k = np.clip(np.sum(lm <= zm, axis=1) - 1, 0, n_lvl - 2)
+                                rows_i = np.arange(lm.shape[0])
+                                z0 = lm[rows_i, k]
+                                z1 = lm[rows_i, k + 1]
+                                frac_step = np.where(z1 > z0 + 1e-6, np.clip((zs_w[mid] - z0) / (z1 - z0), 0.0, 1.0), 0.0)
+                                vol_frac = (k + frac_step) / max(n_lvl - 1, 1)
+                                vols[mid] = vol_frac * vmax_w[mid]
+
+                            return float(np.sum(vols)), "subgrid_hypsometric"
+        except Exception:
+            pass
+
+    # Fallback: regular-grid (zs - zb) * cell_area
+    da_h = _extract_depth_timeseries(ds_map)
+    if da_h is not None:
+        h_end = da_h.isel(time=-1).values
+        valid = np.isfinite(h_end) & (h_end > 0.01)
+        if active_mask is not None and active_mask.shape == h_end.shape:
+            valid &= active_mask
+        h_end_clean = np.where(valid, h_end, 0.0)
+        return float(np.sum(h_end_clean) * cell_area), "regular_grid_approx"
+    return 0.0, "unavailable"
+
+
 def volume_balance(model_dir: Path) -> Dict[str, Any]:
     """
     Run-time QA (Issue H5):
-    Evaluates conservation of mass (volume balance closure).
-    Total Rain Volume vs (Final Surface Storage + Infiltration Loss + Outflow Boundary Flux).
+    Evaluates conservation of mass (volume balance closure):
+    Total Rain Volume vs Final Surface Storage (exact subgrid hypsometric volume when available).
     """
     map_nc = model_dir / "sfincs_map.nc"
     if not map_nc.exists():
         raise FileNotFoundError(f"Results file sfincs_map.nc not found in {model_dir}")
 
-    ds = xr.open_dataset(map_nc)
+    with xr.open_dataset(map_nc) as ds:
+        # Infer cell area from inp or sfincs.inp if attrs do not carry dx/dy
+        dx = float(ds.attrs.get("dx", 0.0))
+        dy = float(ds.attrs.get("dy", 0.0))
+        if dx <= 0 or dy <= 0:
+            inp_file = model_dir / "sfincs.inp"
+            if inp_file.exists():
+                for line in inp_file.read_text(errors="ignore").splitlines():
+                    if "=" in line:
+                        k, v = [p.strip() for p in line.split("=", 1)]
+                        if k == "dx":
+                            dx = float(v)
+                        elif k == "dy":
+                            dy = float(v)
+        dx = dx if dx > 0 else 40.0
+        dy = dy if dy > 0 else 40.0
+        cell_area = dx * dy
 
-    # Cell area
-    dx = float(ds.attrs.get("dx", 40.0))
-    dy = float(ds.attrs.get("dy", 40.0))
-    cell_area = dx * dy
+        active_mask = (ds["msk"].values == 1) if "msk" in ds.data_vars else None
 
-    # 1. Final surface water volume
-    if "h" in ds.data_vars:
-        h_end = ds["h"].isel(time=-1).values
-        h_end_clean = np.where(np.isfinite(h_end) & (h_end > 0.01), h_end, 0.0)
-        v_storage = float(np.sum(h_end_clean) * cell_area)
-    else:
-        v_storage = 0.0
+        # 1. Final surface water volume (exact subgrid hypsometry when sfincs_subgrid.nc is present)
+        v_storage, vol_method = _compute_subgrid_storage_volume(model_dir, ds, cell_area, active_mask)
 
-    # 2. Cumulative rain forcing volume
+    # 2. Cumulative rain forcing volume on active cells
     v_rain = 0.0
     precip_nc = model_dir / "precip_2d.nc"
     if precip_nc.exists():
-        pds = xr.open_dataset(precip_nc)
-        pvar = "precip_2d" if "precip_2d" in pds else list(pds.data_vars.keys())[0]
-        # Rain in mm/hr -> convert to meters per hour -> sum over hours
-        p_arr = pds[pvar].values
-        p_clean = np.where(np.isfinite(p_arr) & (p_arr > 0), p_arr, 0.0)
-        # SFINCS NetCDF precip is typically mm/hr. 1 hour = 3600s -> dt = 1 hr
-        total_p_mm = np.sum(p_clean, axis=0)  # total mm per pixel
-        total_p_m = total_p_mm / 1000.0
-        # Active cells
-        msk_bin = model_dir / "sfincs.msk"
-        if msk_bin.exists():
-            msk = np.fromfile(msk_bin, dtype=np.int8)
-            if msk.size == total_p_m.size:
-                total_p_m = np.where(msk.reshape(total_p_m.shape) > 0, total_p_m, 0.0)
-        v_rain = float(np.sum(total_p_m) * cell_area)
-
-    # Closure estimation
-    closure_pct = 0.0
-    if v_rain > 0:
-        # Without exact internal flux logs, storage/rain ratio
-        retention_ratio = v_storage / v_rain
-        closure_pct = round(abs(1.0 - retention_ratio) * 100.0, 2)
+        with xr.open_dataset(precip_nc) as pds:
+            pvar = "precip_2d" if "precip_2d" in pds else [v for v in pds.data_vars if "time" in pds[v].dims][0]
+            p_arr = pds[pvar].values
+            p_clean = np.where(np.isfinite(p_arr) & (p_arr > 0), p_arr, 0.0)
+            # Trapezoidal integration over hourly timesteps (mm/hr * dt_hr -> mm)
+            if p_clean.shape[0] > 1 and "time" in pds.coords:
+                times_hr = (pds["time"].values - pds["time"].values[0]) / np.timedelta64(1, "h")
+                dt_hr = np.diff(times_hr)
+                total_p_mm = np.sum(0.5 * (p_clean[:-1] + p_clean[1:]) * dt_hr[:, None, None], axis=0)
+            else:
+                total_p_mm = np.sum(p_clean, axis=0)
+            total_p_m = total_p_mm / 1000.0
+            if active_mask is not None and active_mask.shape == total_p_m.shape:
+                total_p_m = np.where(active_mask, total_p_m, 0.0)
+            else:
+                msk_bin = model_dir / "sfincs.msk"
+                if msk_bin.exists():
+                    msk = np.fromfile(msk_bin, dtype=np.int8)
+                    if msk.size == total_p_m.size:
+                        total_p_m = np.where(msk.reshape(total_p_m.shape) == 1, total_p_m, 0.0)
+            v_rain = float(np.sum(total_p_m) * cell_area)
 
     result = {
         "cell_area_m2": cell_area,
+        "storage_method": vol_method,
         "estimated_rain_volume_m3": round(v_rain, 1),
         "final_storage_volume_m3": round(v_storage, 1),
         "storage_fraction_of_rain": round(v_storage / max(v_rain, 1e-5), 4),
-        "closure_note": "Includes continuous infiltration loss and boundary outflow discharge.",
+        "closure_note": "Residual (1 - storage_fraction) reflects infiltration loss + boundary outflow discharge.",
     }
-    print(f"[QA INFO] Volume balance: Rain={v_rain/1e6:.2f} Mm³, End Storage={v_storage/1e6:.2f} Mm³ ({v_storage/max(v_rain,1e-5)*100:.1f}%)")
+    print(f"[QA INFO] Volume balance ({vol_method}): Rain={v_rain/1e6:.2f} Mm³, End Storage={v_storage/1e6:.2f} Mm³ ({v_storage/max(v_rain,1e-5)*100:.1f}%)")
     return result
 
 
@@ -266,20 +412,27 @@ def run_all_qa(
 
     try:
         report["roughness_qa"] = check_roughness(model_dir)
+        if not report["roughness_qa"].get("passed", False):
+            report["all_passed"] = False
     except Exception as e:
         report["roughness_qa"] = {"passed": False, "error": str(e)}
         report["all_passed"] = False
 
     try:
         report["boundary_qa"] = check_boundaries(model_dir)
+        if not report["boundary_qa"].get("passed", False):
+            report["all_passed"] = False
     except Exception as e:
         report["boundary_qa"] = {"passed": False, "error": str(e)}
         report["all_passed"] = False
 
     try:
         report["peak_timing_qa"] = check_peak_timing(model_dir)
+        if not report["peak_timing_qa"].get("passed", False):
+            report["all_passed"] = False
     except Exception as e:
         report["peak_timing_qa"] = {"passed": False, "error": str(e)}
+        report["all_passed"] = False
 
     try:
         report["volume_balance_qa"] = volume_balance(model_dir)

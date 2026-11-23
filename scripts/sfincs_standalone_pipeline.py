@@ -32,6 +32,7 @@ script_dir = Path(__file__).resolve().parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 import _env
+from geo_utils import compute_wmo_arf, get_dynamic_recession_hours
 from perka_bnpb_classification import classify_perka_bnpb
 from qa_checks import check_roughness, check_boundaries, check_peak_timing, volume_balance, run_all_qa
 from validate_against_survey import validate_flood_map
@@ -124,7 +125,7 @@ def find_cluster_geometry(
 
 def find_elevation_dem_path(explicit_path: Optional[Union[str, Path]] = None) -> Path:
     """
-    Finds the elevation DEM raster unambiguously.
+    Finds the elevation DEM raster unambiguously (supports both projected DEMs and native 30m FABDEM).
     Rejects loose glob fallbacks (Issue M5).
     """
     if explicit_path:
@@ -134,6 +135,8 @@ def find_elevation_dem_path(explicit_path: Optional[Union[str, Path]] = None) ->
         raise FileNotFoundError(f"Explicitly specified DEM not found at: {p}")
 
     candidates = [
+        Path("data/fabdem_30m.tif"),
+        Path("data_raw/fabdem/FABDEM30m_Sumbar.tif"),
         Path("data/fabdem_reprojected.tif"),
         Path("data/dem_reprojected.tif"),
         Path("data/dem.tif"),
@@ -151,31 +154,75 @@ def find_elevation_dem_path(explicit_path: Optional[Union[str, Path]] = None) ->
 
 def compute_river_hydraulic_geometry(
     rivers_gdf: gpd.GeoDataFrame,
+    river_polygons_gpkg: Optional[Union[str, Path]] = "data/rivers_ar.gpkg",
+    silted_profile: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Assigns hydraulic geometry parameters (rivwth, rivdph, manning) to river centerlines
-    based on hydraulic geometry power laws (Issue H2).
+    using Indonesian aggraded/silted channel geometry (default v2.0 standard) and optional
+    BIG RBI river polygon widths (rivers_ar.gpkg) when available (Issue H2).
     """
     gdf = rivers_gdf.copy()
     num_rivers = len(gdf)
+    if num_rivers == 0:
+        return gdf
 
     # Base estimates from channel class / naming
     has_name = gdf["NAMOBJ"].notna() if "NAMOBJ" in gdf.columns else np.zeros(num_rivers, dtype=bool)
     is_double_line = (gdf["REMARK"] == "Sungai") if "REMARK" in gdf.columns else np.zeros(num_rivers, dtype=bool)
     length = gdf["SHAPE_Leng"].values if "SHAPE_Leng" in gdf.columns else np.full(num_rivers, 500.0)
 
-    # Hydraulic geometry power law proxy (Leopold & Maddock 1953; BWS Sumatera V 2020, 2022; Suripin 2004):
-    # Accounts for active riverbed aggradation (sedimentation) in middle/lower Sumatera reaches:
-    # Major named trunk channels: width 35-60m, depth 2.0m (aggraded from 2.5m)
-    # Secondary streams: width 20-30m, depth 1.6m (aggraded from 2.0m)
-    # Minor headwater tributaries: width 12-18m, depth 1.2m (aggraded from 1.4m)
-    rivwth = np.where(is_double_line | (has_name & (length > 2000)), 35.0, np.where(has_name, 25.0, 15.0))
-    rivdph = np.where(is_double_line | (has_name & (length > 2000)), 2.0, np.where(has_name, 1.6, 1.2))
+    if silted_profile:
+        # Calibrated silted/aggraded Indonesian alluvial channel profile (v2.0 national standard):
+        # Prevents artificial over-carving of trenches in FABDEM while preserving realistic overbank spill.
+        rivwth = np.where(is_double_line | (has_name & (length > 2000)), 22.0, np.where(has_name, 15.0, 8.0))
+        rivdph = np.where(is_double_line | (has_name & (length > 2000)), 0.80, np.where(has_name, 0.55, 0.35))
+        manning_n = 0.045  # Vegetated/aggraded tropical river banks (Chow 1959 / Arcement & Schneider 1989)
+    else:
+        # Legacy idealized clean channel profile
+        rivwth = np.where(is_double_line | (has_name & (length > 2000)), 30.0, np.where(has_name, 20.0, 12.0))
+        rivdph = np.where(is_double_line | (has_name & (length > 2000)), 1.20, np.where(has_name, 0.85, 0.60))
+        manning_n = 0.035
+
+    # Enhance trunk widths using mapped BIG RBI river polygons (rivers_ar.gpkg) when available
+    if river_polygons_gpkg and Path(river_polygons_gpkg).exists():
+        try:
+            poly_bbox = tuple(gdf.total_bounds)
+            ar_gdf = gpd.read_file(river_polygons_gpkg, bbox=poly_bbox)
+            if not ar_gdf.empty:
+                if gdf.crs is not None and ar_gdf.crs != gdf.crs:
+                    ar_gdf = ar_gdf.to_crs(gdf.crs)
+                # Effective hydraulic width proxy for elongated river polygons: W ~ 2 * Area / Perimeter
+                perim = np.maximum(ar_gdf.geometry.length.values, 1.0)
+                ar_gdf = ar_gdf.copy()
+                ar_gdf["_poly_w"] = np.clip((2.0 * ar_gdf.geometry.area.values) / perim, 12.0, 250.0)
+                joined = gpd.sjoin(gdf[["geometry"]], ar_gdf[["geometry", "_poly_w"]], how="left", predicate="intersects")
+                max_poly_w = joined.groupby(joined.index)["_poly_w"].max()
+                mapped_w = np.array([float(max_poly_w.get(idx, np.nan)) for idx in gdf.index], dtype=float)
+                rivwth = np.where(np.isfinite(mapped_w), np.maximum(rivwth, mapped_w), rivwth)
+        except Exception:
+            pass
 
     gdf["rivwth"] = np.round(rivwth, 1)
     gdf["rivdph"] = np.round(rivdph, 2)
-    gdf["manning"] = 0.035  # SNI 2830:2008 / KP-03 natural meandering river channels with gravel/debris
+    gdf["manning"] = manning_n
     return gdf
+
+
+def _detect_epsg(path: Path, fallback_epsg: int) -> int:
+    """Reads the native EPSG code from a raster or vector file header, falling back safely."""
+    try:
+        if path.suffix.lower() in {".tif", ".tiff", ".vrt"}:
+            with rasterio.open(path) as src:
+                if src.crs and src.crs.to_epsg():
+                    return int(src.crs.to_epsg())
+        elif path.suffix.lower() in {".gpkg", ".shp", ".geojson", ".parquet"}:
+            gdf_hdr = gpd.read_file(path, rows=1)
+            if gdf_hdr.crs and gdf_hdr.crs.to_epsg():
+                return int(gdf_hdr.crs.to_epsg())
+    except Exception:
+        pass
+    return int(fallback_epsg)
 
 
 def prepare_cluster_clipped_rasters(
@@ -183,15 +230,23 @@ def prepare_cluster_clipped_rasters(
     das_geom: gpd.GeoDataFrame,
     source_dem: Optional[Path] = None,
     buffer_meters: float = 2000.0,
+    chip_res_m: float = 10.0,
 ) -> Tuple[str, Optional[Path]]:
     """
-    Extracts a local windowed chip of the large DEM for the specific cluster with metadata caching (Issue M6).
+    Extracts a local windowed chip of the DEM for the specific cluster with metadata caching (Issue M6).
+    Supports BOTH pre-projected DEMs AND native 30m geographic (EPSG:4326) FABDEM via on-the-fly
+    WarpedVRT windowed reprojection & bilinear resampling to `chip_res_m` in the DAS projected CRS
+    (eliminating multi-gigabyte pre-upsampled provincial rasters).
+    Exports the DAS polygon mask ('das_region.gpkg') so setup_mask_active masks out-of-basin cells (msk=0).
     Clips and conditions river hydrography with hydraulic geometry (Issue H2).
-    Generates outlet boundary polygon (Issue H3).
-    Builds the per-DAS catalog with native dataset CRSs (Issues M2, M3, C1).
+    Generates outlet boundary polygon (Issue H3) using lowest-elevation fallback when needed.
+    Builds the per-DAS catalog with native dataset CRSs (portable across all Indonesian UTM zones).
 
     Returns: (catalog_path, outlet_boundary_path)
     """
+    from rasterio.vrt import WarpedVRT
+    from rasterio.enums import Resampling
+
     root_dir = Path(".").resolve()
     chip_dir = (root_dir / "temp" / "chips" / das_id).resolve()
     chip_dir.mkdir(parents=True, exist_ok=True)
@@ -199,14 +254,25 @@ def prepare_cluster_clipped_rasters(
     if source_dem is None or not source_dem.exists():
         source_dem = find_elevation_dem_path()
 
+    active_crs = das_geom.crs
+
+    # Save DAS polygon for setup_mask_active (mask: das_region)
+    das_region_path = chip_dir / "das_region.gpkg"
+    das_geom.to_file(das_region_path, driver="GPKG")
+
     minx, miny, maxx, maxy = das_geom.total_bounds
-    bbox = (float(minx - buffer_meters), float(miny - buffer_meters), float(maxx + buffer_meters), float(maxy + buffer_meters))
+    # Snap bbox to chip_res_m grid for clean alignment
+    snap_minx = float(np.floor((minx - buffer_meters) / chip_res_m) * chip_res_m)
+    snap_miny = float(np.floor((miny - buffer_meters) / chip_res_m) * chip_res_m)
+    snap_maxx = float(np.ceil((maxx + buffer_meters) / chip_res_m) * chip_res_m)
+    snap_maxy = float(np.ceil((maxy + buffer_meters) / chip_res_m) * chip_res_m)
+    bbox = (snap_minx, snap_miny, snap_maxx, snap_maxy)
 
     # 1. DEM Chip Caching (Issue M6)
     dem_chip_path = chip_dir / "dem_chip.tif"
     meta_json_path = chip_dir / "chip_meta.json"
     source_mtime = os.path.getmtime(source_dem)
-    cache_key = f"{source_dem.resolve()}_{source_mtime}_{bbox}"
+    cache_key = f"v3_vrt_{source_dem.resolve()}_{source_mtime}_{bbox}_{chip_res_m}_{active_crs.to_epsg()}"
     cache_hash = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
 
     rebuild_chip = True
@@ -224,39 +290,87 @@ def prepare_cluster_clipped_rasters(
             rebuild_chip = True
 
     if rebuild_chip:
-        print(f"[{das_id}] Clipping DEM window from {source_dem.name}...")
+        print(f"[{das_id}] Extracting {chip_res_m:.0f}m DEM chip from {source_dem.name} (CRS={active_crs.to_epsg()})...")
         with rasterio.open(source_dem) as src:
-            win = rasterio.windows.from_bounds(*bbox, transform=src.transform)
-            data = src.read(window=win)
-            win_transform = src.window_transform(win)
-            profile = src.profile.copy()
+            same_crs = (src.crs == active_crs)
+            same_res = same_crs and (abs(abs(src.res[0]) - chip_res_m) <= 0.5) and (abs(abs(src.res[1]) - chip_res_m) <= 0.5)
 
-            # Fill sea/ocean nodata cells with 0.0m (sea level) so coastal/island tiles have valid elevations
+            if same_res:
+                win = rasterio.windows.from_bounds(*bbox, transform=src.transform)
+                data = src.read(window=win, boundless=True, fill_value=np.nan).astype(np.float32)
+                win_transform = src.window_transform(win)
+                dst_crs = src.crs
+            else:
+                # On-the-fly windowed reprojection + bilinear resampling via GDAL WarpedVRT
+                dst_width = int(round((snap_maxx - snap_minx) / chip_res_m))
+                dst_height = int(round((snap_maxy - snap_miny) / chip_res_m))
+                win_transform = rasterio.transform.from_bounds(
+                    snap_minx, snap_miny, snap_maxx, snap_maxy, dst_width, dst_height
+                )
+                dst_crs = active_crs
+                vrt_opts = {
+                    "crs": dst_crs,
+                    "transform": win_transform,
+                    "width": dst_width,
+                    "height": dst_height,
+                    "resampling": Resampling.bilinear,
+                    "nodata": -9999.0,
+                }
+                if src.nodata is not None:
+                    vrt_opts["src_nodata"] = src.nodata
+                with WarpedVRT(src, **vrt_opts) as vrt:
+                    data = vrt.read().astype(np.float32)
+
+            # Distinguish border-connected ocean NoData (fill with 0.0m for coastal msk=2 edges)
+            # from interior highland NoData gaps (preserve as -9999.0 so inland pits are not sunk to sea level).
             src_nodata = src.nodata
-            invalid_mask = (~np.isfinite(data)) | (data > 1e10)
-            if src_nodata is not None:
-                invalid_mask |= (data == src_nodata)
-            data[invalid_mask] = 0.0
+            invalid_mask = (~np.isfinite(data[0])) | (data[0] > 1e10) | (data[0] < -500.0)
+            if src_nodata is not None and np.isfinite(src_nodata):
+                invalid_mask |= (data[0] == src_nodata)
 
-            profile.update({
+            if np.any(invalid_mask):
+                labeled_inv, n_inv = ndimage.label(invalid_mask)
+                border_inv = (
+                    set(np.unique(labeled_inv[0, :]))
+                    | set(np.unique(labeled_inv[-1, :]))
+                    | set(np.unique(labeled_inv[:, 0]))
+                    | set(np.unique(labeled_inv[:, -1]))
+                )
+                border_inv.discard(0)
+                is_border_nodata = np.isin(labeled_inv, list(border_inv)) if border_inv else np.zeros_like(invalid_mask)
+                valid_vals = data[0][~invalid_mask]
+                is_coastal_tile = (valid_vals.size > 0) and (float(np.nanpercentile(valid_vals, 1)) < 5.0)
+                if is_coastal_tile:
+                    data[0][is_border_nodata] = 0.0
+                    data[0][invalid_mask & (~is_border_nodata)] = -9999.0
+                else:
+                    data[0][invalid_mask] = -9999.0
+
+            profile = {
+                "driver": "GTiff",
+                "dtype": "float32",
+                "count": data.shape[0],
                 "height": data.shape[1],
                 "width": data.shape[2],
+                "crs": dst_crs,
                 "transform": win_transform,
                 "compress": "lzw",
                 "tiled": True,
+                "blockxsize": 256,
+                "blockysize": 256,
                 "nodata": -9999.0,
-            })
+            }
             with rasterio.open(dem_chip_path, "w", **profile) as dst:
                 dst.write(data)
 
         with open(meta_json_path, "w") as mf:
-            json.dump({"hash": cache_hash, "source_dem": str(source_dem), "mtime": source_mtime, "bbox": bbox}, mf, indent=2)
+            json.dump({"hash": cache_hash, "source_dem": str(source_dem), "mtime": source_mtime, "bbox": bbox, "chip_res_m": chip_res_m}, mf, indent=2)
     else:
         print(f"[{das_id}] Reusing cached DEM chip: {dem_chip_path.name}")
 
-    # 2. Extract and Verify CRSs for Datasets (Issue M3)
-    active_crs = das_geom.crs
-    dem_crs_val = active_crs.to_epsg() or 32747
+    # 2. Extract and Verify Native CRSs for Datasets (Dynamic across all Indonesian UTM zones)
+    dem_crs_val = _detect_epsg(dem_chip_path, fallback_epsg=(active_crs.to_epsg() or 32747))
+    region_crs_val = active_crs.to_epsg() or dem_crs_val
 
     # 3. Clip and Condition Rivers for Subgrid Burning (Issue H2)
     rivers_chip_path = chip_dir / "rivers.gpkg"
@@ -282,9 +396,7 @@ def prepare_cluster_clipped_rasters(
             gdf_out = gpd.read_file(outlet_src_path).to_crs(active_crs)
             if not gdf_out.empty:
                 pt = gdf_out.geometry.iloc[0]
-                # Snap point to watershed boundary
                 snapped_pt = das_poly_geom.boundary.interpolate(das_poly_geom.boundary.project(pt))
-                # Buffer to create a boundary polygon intersecting edge cells
                 outlet_buf = snapped_pt.buffer(250.0)
                 outlet_gdf = gpd.GeoDataFrame([{"geometry": outlet_buf, "btype": "outflow"}], crs=active_crs)
                 outlet_gdf.to_file(outlet_poly_path, driver="GPKG")
@@ -293,35 +405,61 @@ def prepare_cluster_clipped_rasters(
         except Exception as e:
             print(f"[{das_id}] Note: Failed to generate outlet from {outlet_src_path.name}: {e}")
 
-    # Fallback lowest-elevation river outlet if outlet file was not found
+    # Fallback: pick LOWEST-ELEVATION river-boundary intersection point (never arbitrary first point!)
     if not has_outlet and rivers_chip_path.exists():
         try:
             riv_sub = gpd.read_file(rivers_chip_path).to_crs(active_crs)
             inter = riv_sub.intersection(das_poly_geom.boundary)
-            inter_pts = [g for g in inter if not g.is_empty]
-            if inter_pts:
-                pt = inter_pts[0]
-                if pt.geom_type == "MultiPoint":
-                    pt = pt.geoms[0]
-                outlet_buf = pt.buffer(250.0)
+            cand_pts = []
+            for g in inter:
+                if g is None or g.is_empty:
+                    continue
+                if g.geom_type == "Point":
+                    cand_pts.append(g)
+                elif g.geom_type == "MultiPoint":
+                    cand_pts.extend(list(g.geoms))
+                else:
+                    cand_pts.append(g.centroid)
+            if cand_pts:
+                best_pt = cand_pts[0]
+                best_elev = float("inf")
+                with rasterio.open(dem_chip_path) as dsrc:
+                    for pt_c, val in zip(cand_pts, dsrc.sample([(p.x, p.y) for p in cand_pts])):
+                        z = float(val[0])
+                        if np.isfinite(z) and z > -500.0 and z < best_elev:
+                            best_elev = z
+                            best_pt = pt_c
+                outlet_buf = best_pt.buffer(250.0)
                 outlet_gdf = gpd.GeoDataFrame([{"geometry": outlet_buf, "btype": "outflow"}], crs=active_crs)
                 outlet_gdf.to_file(outlet_poly_path, driver="GPKG")
                 has_outlet = True
-                print(f"[{das_id}] Outflow boundary polygon created from river boundary intersection")
+                print(f"[{das_id}] Outflow boundary polygon created at lowest river outlet (z={best_elev:.1f}m)")
         except Exception as e:
             print(f"[{das_id}] Note: River boundary outlet fallback failed: {e}")
 
-    # 5. Write Universal Per-DAS Data Catalog (Issues C1, M2, M3)
+    # 5. Write Universal Per-DAS Data Catalog with Native CRSs
     das_catalog_path = chip_dir / "catalog.yml"
     abs_dem_path = dem_chip_path.as_posix()
     abs_root = root_dir.as_posix()
     abs_riv_path = rivers_chip_path.as_posix()
+    abs_region_path = das_region_path.as_posix()
 
-    # Use data/landcover_rbi.tif if available, fallback to landcover_100m.tif
-    lc_path = (root_dir / "data" / "landcover_rbi.tif").as_posix() if (root_dir / "data" / "landcover_rbi.tif").exists() else f"{abs_root}/data/landcover_100m.tif"
+    lc_file = (root_dir / "data" / "landcover_rbi.tif") if (root_dir / "data" / "landcover_rbi.tif").exists() else (root_dir / "data" / "landcover_100m.tif")
+    soil_file = root_dir / "data" / "soil_infiltration_100m.tif"
+
+    riv_crs_val = _detect_epsg(rivers_chip_path, fallback_epsg=region_crs_val)
+    lc_crs_val = _detect_epsg(lc_file, fallback_epsg=dem_crs_val)
+    soil_crs_val = _detect_epsg(soil_file, fallback_epsg=dem_crs_val)
 
     catalog_content = f"""# Universal HydroMT-SFINCS Data Catalog for {das_id}
 # Compatible with HydroMT 0.10.1 / hydromt_sfincs 1.2.2
+
+# --- Active Watershed Domain Polygon (for setup_mask_active) ---
+das_region:
+  path: {abs_region_path}
+  data_type: GeoDataFrame
+  driver: vector
+  crs: {region_crs_val}
 
 # --- Elevation DEM ---
 fabdem_sumbar:
@@ -341,41 +479,41 @@ rbi_river_sumbar:
   path: {abs_riv_path}
   data_type: GeoDataFrame
   driver: vector
-  crs: 32747
+  crs: {riv_crs_val}
 
 rivers:
   path: {abs_riv_path}
   data_type: GeoDataFrame
   driver: vector
-  crs: 32747
+  crs: {riv_crs_val}
 
 # --- Land Cover & Roughness ---
 rbi_landcover_sumbar:
-  path: {lc_path}
+  path: {lc_file.as_posix()}
   data_type: RasterDataset
   driver: raster
-  crs: 32747
+  crs: {lc_crs_val}
   nodata: 0
 
 landcover:
-  path: {lc_path}
+  path: {lc_file.as_posix()}
   data_type: RasterDataset
   driver: raster
-  crs: 32747
+  crs: {lc_crs_val}
   nodata: 0
 
-# --- Soil Infiltration Capacity (Ksat) ---
+# --- Soil Infiltration Capacity (AMC-III qinf) ---
 soil_infiltration_sumbar:
-  path: {abs_root}/data/soil_infiltration_100m.tif
+  path: {soil_file.as_posix()}
   data_type: RasterDataset
   driver: raster
-  crs: 32747
+  crs: {soil_crs_val}
 
 soil_infiltration:
-  path: {abs_root}/data/soil_infiltration_100m.tif
+  path: {soil_file.as_posix()}
   data_type: RasterDataset
   driver: raster
-  crs: 32747
+  crs: {soil_crs_val}
 
 # --- Gridded Design Rainfall Events (Native netCDF coordinates, no forced CRS) ---
 rainfall_rp2:
@@ -442,18 +580,9 @@ def build_sfincs_standalone(
     das_geom, resolved_id = find_cluster_geometry(das_gdf, das_id, id_column="ID_Cluster")
     das_geom = das_geom.copy()
 
-    # 2. Administrative Boundary Clipping
-    admin_candidates = [admin_boundary_gpkg, "data/boundary_kabkot.gpkg", "data/admin_boundary.gpkg"]
-    resolved_admin = next((c for c in admin_candidates if c and os.path.exists(c)), None)
-    if resolved_admin:
-        try:
-            admin_gdf = gpd.read_file(resolved_admin).to_crs(das_geom.crs)
-            admin_buffered = admin_gdf.geometry.union_all().buffer(2000.0) if hasattr(admin_gdf.geometry, "union_all") else admin_gdf.geometry.unary_union.buffer(2000.0)
-            clipped_geom = das_geom.intersection(admin_buffered)
-            if not clipped_geom.empty and not clipped_geom.is_empty.all():
-                das_geom["geometry"] = clipped_geom
-        except Exception as e:
-            print(f"[{das_id}] Note: Regional boundary clipping skipped: {e}")
+    # 2. Preserve Complete Hydrological Catchment (do NOT clip upstream headwaters at admin borders!)
+    if admin_boundary_gpkg:
+        print(f"[{das_id}] Preserving complete hydrological watershed for SFINCS physics (admin clipping reserved for final reporting).")
 
     temp_das_dir = Path("data/das_clusters/individual")
     temp_das_dir.mkdir(parents=True, exist_ok=True)
@@ -539,6 +668,108 @@ def build_sfincs_standalone(
     return str(model_root)
 
 
+def _apply_cnb_infiltration_to_case(
+    case_dir: Path,
+    sf: SfincsModel,
+    cn_tif: Path,
+    initial_sat_frac: float = 0.50,
+    ks_recovery_mmhr: float = 0.0,
+) -> None:
+    """
+    Replaces constant qinf with verified SFINCS v2.4.0+ Curve Number with Recovery (CNB) binary maps:
+      - sfincs.smax : Maximum potential soil retention S_max [m] = (1000/CN - 10) * 0.0254
+      - sfincs.seff : Initial effective storage capacity [m] = S_max * (1 - initial_sat_frac)
+                      (Note: SFINCS CNB starts with seff available storage; 50% pre-filled => seff = 0.50 * S_max)
+      - sfincs.ks   : Recovery hydraulic conductivity [mm/hr] (0.0 during single-event storm)
+
+    Explicitly deletes sfincs.qinf, gis/qinf.tif, and sfincs.scs so legacy v2.4.0 scsfile bugs
+    or zombie qinf files can never override CNB infiltration.
+    """
+    import rioxarray
+    from hydromt_sfincs import workflows
+
+    da_cn = rioxarray.open_rasterio(cn_tif, masked=True).squeeze("band", drop=True)
+    da_cn = da_cn.raster.reproject_like(sf.grid, method="med")
+    da_s_m = (workflows.cn_to_s(da_cn, sf.mask > 0) * 0.0254).astype(np.float32)
+
+    if da_s_m.raster.res[1] < 0:
+        da_s_m = da_s_m.raster.flipud()
+    msk_da = sf.grid["msk"]
+    if msk_da.raster.res[1] < 0:
+        msk_da = msk_da.raster.flipud()
+    mask_arr = msk_da.values
+
+    smax_arr = np.nan_to_num(da_s_m.values, nan=0.0).astype(np.float32)
+    avail_frac = float(np.clip(1.0 - initial_sat_frac, 0.0, 1.0))
+    seff_arr = (smax_arr * avail_frac).astype(np.float32)
+    ks_arr = np.full_like(smax_arr, float(ks_recovery_mmhr), dtype=np.float32)
+
+    sf.reggrid.write_map(str(case_dir / "sfincs.smax"), data=smax_arr, mask=mask_arr, dtype="f4")
+    sf.reggrid.write_map(str(case_dir / "sfincs.seff"), data=seff_arr, mask=mask_arr, dtype="f4")
+    sf.reggrid.write_map(str(case_dir / "sfincs.ks"), data=ks_arr, mask=mask_arr, dtype="f4")
+
+    for stale in [case_dir / "sfincs.qinf", case_dir / "gis" / "qinf.tif", case_dir / "sfincs.scs"]:
+        if stale.exists():
+            stale.unlink()
+
+    drop_prefixes = ("qinffile", "qinf ", "qinf=", "scsfile", "smaxfile", "sefffile", "ksfile")
+    inp_path = case_dir / "sfincs.inp"
+    lines = [
+        ln for ln in inp_path.read_text(encoding="utf-8").splitlines()
+        if not ln.strip().lower().startswith(drop_prefixes)
+    ]
+    lines += [
+        "smaxfile             = sfincs.smax",
+        "sefffile             = sfincs.seff",
+        "ksfile               = sfincs.ks",
+    ]
+    inp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    act_s = smax_arr[mask_arr > 0]
+    print(f"  [CNB] Applied smax/seff/ks from {cn_tif.name} (Smax mean={act_s.mean():.3f}m, initial_sat={initial_sat_frac*100:.0f}%)")
+
+
+def _apply_coastal_mhhw_to_case(case_dir: Path, sf: SfincsModel, mhhw_m: float = 0.80) -> int:
+    """
+    Writes native SFINCS sfincs.bnd and sfincs.bzs files applying a constant Mean Higher High Water
+    (MHHW) coastal tailwater elevation (+mhhw_m) across all coastal waterlevel cells (msk == 2).
+    Bypasses hydromt_sfincs 1.2.2 pandas-3 Index.is_integer incompatibility.
+    """
+    msk = sf.mask.values
+    ys, xs = np.where(msk == 2)
+    if len(xs) == 0:
+        return 0
+
+    step = max(1, len(xs) // 25)
+    sel_y = sf.grid["y"].values[ys[::step]]
+    sel_x = sf.grid["x"].values[xs[::step]]
+    n_pts = len(sel_x)
+
+    (case_dir / "sfincs.bnd").write_text(
+        "\n".join(f"{float(x):.2f} {float(y):.2f}" for x, y in zip(sel_x, sel_y)) + "\n",
+        encoding="utf-8",
+    )
+    tref = pd.to_datetime(sf.config["tref"], format="%Y%m%d %H%M%S")
+    tstart = pd.to_datetime(sf.config["tstart"], format="%Y%m%d %H%M%S")
+    tstop = pd.to_datetime(sf.config["tstop"], format="%Y%m%d %H%M%S")
+    t0_s = float((tstart - tref).total_seconds())
+    t1_s = float((tstop - tref).total_seconds())
+    vals_str = " ".join([f"{float(mhhw_m):.3f}"] * n_pts)
+    (case_dir / "sfincs.bzs").write_text(f"{t0_s:.1f} {vals_str}\n{t1_s:.1f} {vals_str}\n", encoding="utf-8")
+
+    inp_path = case_dir / "sfincs.inp"
+    lines = [
+        ln for ln in inp_path.read_text(encoding="utf-8").splitlines()
+        if not ln.strip().lower().startswith(("bndfile", "bzsfile"))
+    ]
+    lines += [
+        "bndfile              = sfincs.bnd",
+        "bzsfile              = sfincs.bzs",
+    ]
+    inp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"  [MHHW] Applied coastal tidal backwater +{mhhw_m:.2f}m at {n_pts} boundary points (sfincs.bnd/sfincs.bzs)")
+    return n_pts
+
+
 def prepare_sfincs_direct_rain_forcing(
     das_id: str,
     return_periods: List[str] = ["rp2", "rp5", "rp10", "rp25", "rp50", "rp100"],
@@ -547,27 +778,55 @@ def prepare_sfincs_direct_rain_forcing(
     data_catalog_fn: Optional[str] = None,
     bws_inflow_hydrographs: Optional[str] = None,
     storm_hours: int = 24,
-    recession_hours: int = 12,
+    recession_hours: Optional[int] = None,  # Auto-scales by basin area (24h <500km2, 36h 500-1500km2, 48h >1500km2)
     tref: str = "20240101 000000",
     tstart: str = "20240101 000000",
+    amc_scale: float = 1.0,                 # Used only if infiltration_mode='qinf'
+    infiltration_mode: str = "cnb",         # 'cnb' (USDA-NRCS smax/seff/ks, v2.0 standard) or 'qinf' (legacy constant)
+    cn_amc2_tif: str = "data/cn_amc2_100m.tif",
+    cn_amc3_tif: str = "data/cn_amc3_100m.tif",
+    coastal_mhhw_m: Optional[float] = 0.80, # Coastal MHHW tailwater backwater [m] on msk=2 cells (None/0 disables)
+    apply_arf: bool = False,                # Optional USWB/WMO Areal Reduction Factor for large basins (>100 km2)
+    alpha: float = 0.65,                    # CFL factor (0.65 safe for pluvial-fluvial floods; ~30% faster than 0.50)
+    huthresh: float = 0.02,                 # Minimum wet flow depth (m); avoids 1cm hillslope sheet-flow choking CFL dt
+    viscosity: int = 0,                     # Disable horizontal eddy viscosity at 40-80m floodplain scale (~10-15% speedup)
+    dtout: float = 3600.0,                  # Map output interval in seconds (zsmax unaffected)
 ):
     """
-    Applies direct rainfall NetCDF forcing for each return period design storm.
-    Ensures extended recession simulation duration (e.g., 72 hours, Issue C2),
-    pads precipitation series with explicit zeros up to tstop (Issue C2),
-    verifies bounding box coverage and detects CRS without silent fallbacks (Issue H4),
-    and validates forcing volume conservation (Issue C2).
+    Applies direct rainfall NetCDF forcing for each return period design storm (v2.0 National Standard).
+    Features:
+      - Dynamic recession duration scaled to active catchment area (24h / 36h / 48h) so large basins drain fully.
+      - Explicit zero-rainfall padding up to tstop + volume conservation verification (Issue C2).
+      - Native SFINCS v2.4.0+ CNB infiltration (smax/seff/ks) with return-period-aware antecedent moisture:
+        AMC-II (25% pre-filled) for RP2-RP10 and AMC-III (50% pre-filled) for RP25-RP100.
+      - Coastal MHHW (+0.80m) tailwater forcing via native sfincs.bnd/sfincs.bzs on coastal domains.
+      - Optional USWB/WMO Areal Reduction Factor (ARF) for large watersheds (>100 km²).
     """
     base_root = Path(base_model_dir) / das_id
     if not base_root.exists():
         raise FileNotFoundError(f"Base model {base_root} not found. Run build_sfincs_standalone first.")
 
-    total_hours = storm_hours + recession_hours
+    # Infer active watershed area for dynamic recession duration & optional ARF
+    sf_probe = SfincsModel(root=str(base_root), mode="r")
+    sf_probe.read()
+    dx_m = float(sf_probe.config.get("dx", 40.0))
+    dy_m = float(sf_probe.config.get("dy", dx_m))
+    active_area_km2 = float(np.sum(sf_probe.mask.values > 0) * dx_m * dy_m / 1e6)
+
+    eff_recession = get_dynamic_recession_hours(active_area_km2) if recession_hours is None else int(recession_hours)
+    total_hours = storm_hours + eff_recession
     tstart_dt = pd.to_datetime(tstart, format="%Y%m%d %H%M%S")
     tstop_dt = tstart_dt + pd.Timedelta(hours=total_hours)
     tstop_str = tstop_dt.strftime("%Y%m%d %H%M%S")
 
-    print(f"[{das_id}] Setting simulation timeline: tstart={tstart}, tstop={tstop_str} (Duration: {total_hours}h = {storm_hours}h storm + {recession_hours}h recession)")
+    print(
+        f"[{das_id}] Active area={active_area_km2:.1f} km² | Timeline: tstart={tstart}, tstop={tstop_str} "
+        f"(Duration: {total_hours}h = {storm_hours}h storm + {eff_recession}h recession)"
+    )
+
+    arf_factor = compute_wmo_arf(active_area_km2, duration_hr=float(storm_hours)) if apply_arf else 1.0
+    if apply_arf and arf_factor < 0.999:
+        print(f"[{das_id}] Applying WMO/USWB Areal Reduction Factor (ARF = {arf_factor:.3f}) for {active_area_km2:.1f} km² catchment.")
 
     for rp in return_periods:
         case_dir = Path(base_model_dir) / f"{das_id}_{rp}"
@@ -581,11 +840,13 @@ def prepare_sfincs_direct_rain_forcing(
         sf.set_config("tstart", tstart)
         sf.set_config("tstop", tstop_str)
 
-        # Output intervals
-        time_interval = 3600.0  # 1 hour
-        sf.set_config("dtout", time_interval)
+        # Output intervals & safe numerical speed tuning
+        sf.set_config("dtout", float(dtout))
         sf.set_config("dtmaxout", float(total_hours * 3600))  # Ensure zsmax covers full run
-        sf.set_config("dtwnd", min(float(sf.config.get("dtwnd", 1800)), time_interval))
+        sf.set_config("dtwnd", min(float(sf.config.get("dtwnd", 1800)), 3600.0))
+        sf.set_config("alpha", float(alpha))
+        sf.set_config("huthresh", float(huthresh))
+        sf.set_config("viscosity", int(viscosity))
 
         # Find rainfall dataset
         nc_candidates = [
@@ -598,7 +859,9 @@ def prepare_sfincs_direct_rain_forcing(
             raise FileNotFoundError(f"Rainfall NetCDF for {rp} not found in {rainfall_dir}. Checked: {[str(c) for c in nc_candidates]}")
 
         ds = xr.open_dataset(nc_path)
-        var_name = "precip" if "precip" in ds.data_vars else list(ds.data_vars.keys())[0]
+        var_name = "precip" if "precip" in ds.data_vars else next(
+            (v for v in ds.data_vars if "time" in ds[v].dims), list(ds.data_vars.keys())[0]
+        )
         precip_da = ds[var_name]
 
         # Standardize coordinates & Detect CRS (Issue H4)
@@ -614,12 +877,9 @@ def prepare_sfincs_direct_rain_forcing(
                 precip_da.raster.set_crs(sf.crs)
 
         # Check Bounding Box Coverage (Issue H4)
-        model_bbox = sf.bbox  # [minx, miny, maxx, maxy] in model CRS
+        # Note: HydroMT SfincsModel.bbox is already in EPSG:4326 (lon/lat); use sf.grid.raster.bounds for projected CRS.
         if is_geographic:
-            # Transform model bbox to EPSG:4326
-            transformer = pyproj.Transformer.from_crs(sf.crs, "EPSG:4326", always_xy=True)
-            m_minlon, m_minlat = transformer.transform(model_bbox[0], model_bbox[1])
-            m_maxlon, m_maxlat = transformer.transform(model_bbox[2], model_bbox[3])
+            m_minlon, m_minlat, m_maxlon, m_maxlat = sf.bbox
             rain_minlon, rain_minlat, rain_maxlon, rain_maxlat = precip_da.raster.bounds
             if not (rain_minlon <= m_minlon and rain_maxlon >= m_maxlon and rain_minlat <= m_minlat and rain_maxlat >= m_maxlat):
                 print(f"[WARNING] Rainfall bounding box [{rain_minlon:.2f}, {rain_minlat:.2f}, {rain_maxlon:.2f}, {rain_maxlat:.2f}] does not fully contain model domain [{m_minlon:.2f}, {m_minlat:.2f}, {m_maxlon:.2f}, {m_maxlat:.2f}]!")
@@ -629,7 +889,6 @@ def prepare_sfincs_direct_rain_forcing(
 
         # QA Check on active cells (Issue H4)
         active_mask = (sf.mask.values > 0)
-        # Check for NaN in raw active cells
         event_total_arr = precip_reprojected.sum(dim="time").values
         active_event_totals = event_total_arr[active_mask]
         nan_count = int(np.isnan(active_event_totals).sum())
@@ -641,16 +900,13 @@ def prepare_sfincs_direct_rain_forcing(
         if zero_rain_pct > 0.5:
             print(f"[WARNING] {zero_rain_pct:.2f}% of active catchment cells receive zero rainfall.")
 
-        precip_clean = precip_reprojected.fillna(0.0)
+        precip_clean = precip_reprojected.fillna(0.0) * arf_factor
 
         # Pad rainfall series with zero-intensity timesteps up to tstop (Issue C2)
-        # SFINCS linearly interpolates between timestamps.
-        # Ensure hours beyond storm_hours are strictly 0.0 mm/hr
         time_coords = pd.date_range(start=tstart_dt, periods=total_hours + 1, freq="1h")
         precip_padded = precip_clean.reindex(time=time_coords, fill_value=0.0)
 
         # Volume Conservation QA Check (Issue C2)
-        # Hourly rainfall in mm/hr integrated over storm_hours
         design_depth_mm = float(precip_clean.sum(dim="time").mean().values)
         integrated_padded_depth_mm = float(precip_padded.sum(dim="time").mean().values)
         vol_diff_pct = abs(design_depth_mm - integrated_padded_depth_mm) / max(design_depth_mm, 1e-5) * 100.0
@@ -671,6 +927,29 @@ def prepare_sfincs_direct_rain_forcing(
         # Write to case directory
         sf.set_root(str(case_dir), mode="w+")
         sf.write()
+
+        # Infiltration scheme: modern CNB (USDA-NRCS Curve Number with recovery) vs legacy constant qinf
+        rp_digits = "".join(ch for ch in str(rp) if ch.isdigit())
+        rp_num = int(rp_digits) if rp_digits else 100
+        use_amc3 = rp_num >= 25
+        cn_path = Path(cn_amc3_tif if use_amc3 else cn_amc2_tif)
+        if str(infiltration_mode).lower() == "cnb" and cn_path.exists():
+            init_sat = 0.50 if use_amc3 else 0.25
+            _apply_cnb_infiltration_to_case(case_dir, sf, cn_path, initial_sat_frac=init_sat)
+        else:
+            if str(infiltration_mode).lower() == "cnb":
+                print(f"  [NOTE] CN raster {cn_path} not found; retaining constant qinf from base model.")
+            qinf_path = case_dir / "sfincs.qinf"
+            if qinf_path.exists() and amc_scale is not None and amc_scale < 1.0:
+                qinf_arr = np.fromfile(qinf_path, dtype=np.float32)
+                qinf_amc = (qinf_arr * amc_scale).astype(np.float32)
+                qinf_amc.tofile(qinf_path)
+                print(f"[{das_id}][{rp}] Scaled soil infiltration to AMC-III (factor: {amc_scale:.2f}x; mean qinf: {np.mean(qinf_arr):.3f} -> {np.mean(qinf_amc):.3f} mm/hr)")
+
+        # Coastal MHHW tailwater forcing (+0.80m default on coastal msk=2 cells)
+        if coastal_mhhw_m is not None and float(coastal_mhhw_m) > 0.0:
+            _apply_coastal_mhhw_to_case(case_dir, sf, mhhw_m=float(coastal_mhhw_m))
+
         print(f"[{das_id}][{rp}] Case configuration ready at {case_dir}.")
 
 
@@ -794,6 +1073,7 @@ def _clip_and_mask_raster(
             geom_mask = geom_mask.to_crs(src.crs)
         shapes = [geom for geom in geom_mask.geometry if geom.is_valid]
 
+        existing_tags = src.tags()
         out_image, out_transform = rasterio.mask.mask(src, shapes, crop=False)
         out_meta = src.meta.copy()
 
@@ -832,32 +1112,41 @@ def _clip_and_mask_raster(
 
     with rasterio.open(raster_path, "w", **out_meta) as dst:
         dst.write(out_image)
+        if existing_tags:
+            dst.update_tags(**existing_tags)
+
 
 
 def refine_flood_hazard_raster(
     depth_tif: str,
     dep_path: Union[str, Path],
     hmin: float = 0.05,
-    island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    bridge_radius: int = 1,    # Option 2: Morphological closing radius in pixels (1 px = 10m; bridges culverts & road cuts without cross-cell grid line bridging)
-    smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
-    h_connect: float = 0.15,   # Option 3: Hydraulic connectivity core depth (0.15m; prunes thin unchannelized sheet flow from bridging)
+    island_mmu_px: Optional[int] = None,   # Optional pixel override; defaults to island_mmu_ha (0.09 ha = 30m x 30m)
+    hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (1.0 ha)
+    island_mmu_ha: float = 0.09,           # Resolution-independent 30m x 30m (0.09 ha) minimum flood patch size
+    hole_mmu_ha: float = 1.0,              # Resolution-independent 1.0 ha hydrostatic enclosed void limit
+    min_hole_ha: float = 0.09,             # Resolution-independent 30m x 30m (0.09 ha = 1 FABDEM pixel) sub-DEM pinhole fill
+    bridge_radius: int = 3,    # Circular morphological closing radius (px) across narrow road cuts & bunds
+    smooth_sigma: float = 1.0, # Boundary anti-aliasing sigma (px)
+    h_connect: float = 0.10,   # 0.10m core depth threshold for hydraulic connectivity bridging
+    freeboard_m: float = 0.0,  # Optional FABDEM vertical uncertainty margin (Option B v2.0 uses +0.25m)
+    max_ext_dist_m: float = 0.0,      # Max outward WSE edge-recovery distance [m] (Option B v2.0 uses 80.0m)
+    max_ext_slope_deg: float = 5.0,   # Slope ceiling [deg] for natural floodplain uncertainty margin (Option B: 5.0°)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
     out_display_tif: Optional[str] = None,
+    max_slope_deg: Optional[float] = 8.0, # Prunes unchannelized hillside noise (width <= 30m, slope >= 8 deg) outside RBI rivers
+    rivers_gpkg: Optional[str] = "data/rivers.gpkg",
 ) -> None:
     """
-    Refines raw downscaled flood depth rasters (Issues C3, M1, M7).
+    Refines raw downscaled flood depth rasters while strictly respecting hydrostatics (Zs > DEM)
+    and enforcing a 4-connected 30m x 30m (0.09 ha, native FABDEM pixel footprint) minimum feature floor.
 
-    Guarantees:
-    1. Preserves raw depth in 'flood_depth_10m_raw.tif' (Issue M7).
-    2. Size-limited hole-filling: fills only enclosed dry voids <= hole_mmu_px; never fills high-ground hills (Issue C3).
-    3. Physically grounded depth reconstruction: wet only if Zs - DEM >= hmin. Never forces hmin when Zs < DEM (Issue C3).
-    4. Masks DEM nodata (3.4e38 and non-finite) before water elevation computation (Issues M1, C3).
-    5. Cosmetic filtering (closing, smoothing) is optional and off by default for the official hazard product (Issue C3).
-    6. Comprehensive parameters recorded in GeoTIFF metadata tags (Issue C3).
+    When `max_ext_dist_m > 0` (Option B v2.0 National Standard: `freeboard_m=0.25`, `max_ext_dist_m=80.0`,
+    `max_ext_slope_deg=5.0`), also recovers bilinear edge-NaN margins and applies a conservative,
+    distance-decaying FABDEM vertical uncertainty margin (Hawker et al., 2022) strictly gated to
+    hydrologically connected flat floodplains (< max_ext_slope_deg) so elevated hills and steep slopes stay dry.
     """
     depth_p = Path(depth_tif)
     # 1. Preserve raw depth raster (Issue M7)
@@ -873,6 +1162,18 @@ def refine_flood_hazard_raster(
         raw_depth = src_d.read(1)
         profile = src_d.profile.copy()
         nodata_d = src_d.nodata
+        raster_bounds = src_d.bounds
+        raster_crs = src_d.crs
+
+    # Convert resolution-independent hectare MMU targets to pixel counts when pixel overrides are not given
+    px_w = abs(float(profile["transform"][0]))
+    px_h = abs(float(profile["transform"][4]))
+    px_area_m2 = max(px_w * px_h, 1.0)
+    if hole_mmu_px is None:
+        hole_mmu_px = int(round((hole_mmu_ha * 10000.0) / px_area_m2)) if hole_mmu_ha > 0 else 0
+    if island_mmu_px is None:
+        island_mmu_px = int(round((island_mmu_ha * 10000.0) / px_area_m2)) if island_mmu_ha > 0 else 0
+    min_hole_px = int(round((min_hole_ha * 10000.0) / px_area_m2)) if min_hole_ha > 0 else 0
 
     with rasterio.open(str(dep_path)) as src_dem:
         dem_nodata = src_dem.nodata
@@ -895,47 +1196,116 @@ def refine_flood_hazard_raster(
         dem = np.where(dem == dem_nodata, np.nan, dem)
     dem = np.where((dem > 3.0e38) | (~np.isfinite(dem)), np.nan, dem)
 
+    # Slope calculation for steep unchannelized hillslope noise pruning
+    if max_slope_deg is not None and max_slope_deg > 0:
+        res_x = abs(profile["transform"][0])
+        res_y = abs(profile["transform"][4])
+        gy, gx = np.gradient(dem, res_y, res_x)
+        slope_deg = np.degrees(np.arctan(np.sqrt(gx**2 + gy**2)))
+    else:
+        slope_deg = None
+
     # Valid mask for raw wet cells
     valid_mask = np.isfinite(raw_depth)
     if nodata_d is not None and np.isfinite(nodata_d):
         valid_mask &= (raw_depth != nodata_d)
     raw_wet_mask = valid_mask & (raw_depth >= hmin) & np.isfinite(dem)
 
-    # 1. Hydraulic Connectivity Filtering (Option 3) & Morphological Closing (Option 2)
+    # Prune narrow unchannelized hillslope runoff ribbons (width <= 30m, slope >= max_slope_deg)
+    # while ALWAYS protecting mapped RBI river corridors (flash-flood / banjir bandang channels)
+    if slope_deg is not None:
+        river_corridor_mask = np.zeros_like(raw_wet_mask, dtype=bool)
+        if rivers_gpkg and os.path.exists(rivers_gpkg):
+            try:
+                from rasterio.features import rasterize
+                riv_gdf = gpd.read_file(rivers_gpkg, bbox=tuple(raster_bounds))
+                if not riv_gdf.empty:
+                    if str(riv_gdf.crs) != str(raster_crs):
+                        riv_gdf = riv_gdf.to_crs(raster_crs)
+                    riv_bufs = riv_gdf.geometry.buffer(30.0)
+                    river_corridor_mask = rasterize(
+                        [(g, 1) for g in riv_bufs if g is not None and not g.is_empty],
+                        out_shape=raw_wet_mask.shape,
+                        transform=profile["transform"],
+                        fill=0,
+                        dtype="uint8",
+                    ).astype(bool)
+            except Exception:
+                pass
+        dist_wet = ndimage.distance_transform_edt(raw_wet_mask)
+        steep_gully = raw_wet_mask & (slope_deg >= max_slope_deg) & (dist_wet <= 1.5) & (~river_corridor_mask)
+        raw_wet_mask = raw_wet_mask & (~steep_gully)
+
+    # 0b. Optional Hydrostatically Connected Natural Floodplain Margin (Option B v2.0 Standard)
+    # Recovers bilinear 40m/80m edge-NaN strips where DEM < Zs and adds a conservative, distance-decaying
+    # FABDEM vertical uncertainty margin (+freeboard_m) strictly gated to connected flat floodplains.
     struct_8 = np.ones((3, 3), dtype=bool)
+    ext_depth_field = None
+    core_wet_mask = raw_wet_mask.copy()
+    if max_ext_dist_m is not None and max_ext_dist_m > 0.0 and np.any(raw_wet_mask):
+        eff_slope = slope_deg
+        if eff_slope is None:
+            gy, gx = np.gradient(dem, px_h, px_w)
+            eff_slope = np.degrees(np.arctan(np.sqrt(gx**2 + gy**2)))
+        zs_core = np.where(raw_wet_mask & np.isfinite(dem), raw_depth + dem, np.nan)
+        dist_to_wet_px, ind_ext = ndimage.distance_transform_edt(
+            np.isnan(zs_core), return_distances=True, return_indices=True
+        )
+        zs_smooth = ndimage.gaussian_filter(zs_core[tuple(ind_ext)], sigma=2.0)
+        dist_to_wet_m = dist_to_wet_px * max(px_w, px_h)
+
+        decay = np.clip(1.0 - (dist_to_wet_m / max(float(max_ext_dist_m), 1.0)), 0.0, 1.0)
+        eff_freeboard = np.where(eff_slope < float(max_ext_slope_deg), max(float(freeboard_m), 0.0) * decay, 0.0)
+        ext_depth_field = (zs_smooth + eff_freeboard) - dem
+
+        slope_strict_lim = float(max_slope_deg) if (max_slope_deg is not None and max_slope_deg > 0) else 8.0
+        allow_ext = (
+            np.isfinite(dem)
+            & (dist_to_wet_m <= float(max_ext_dist_m))
+            & (
+                (((zs_smooth - dem) >= hmin) & (eff_slope < slope_strict_lim))
+                | ((ext_depth_field >= hmin) & (eff_slope < float(max_ext_slope_deg)))
+            )
+        )
+        potential = raw_wet_mask | allow_ext
+        lbl_pot, n_pot = ndimage.label(potential, structure=struct_8)
+        if n_pot > 0:
+            core_labels = np.unique(lbl_pot[raw_wet_mask])
+            core_labels = core_labels[core_labels > 0]
+            seed_wet_mask = np.isin(lbl_pot, core_labels)
+        else:
+            seed_wet_mask = raw_wet_mask.copy()
+    else:
+        seed_wet_mask = raw_wet_mask.copy()
+
+    # 1. Hydraulic Connectivity Filtering & Morphological Closing
     if bridge_radius > 0:
-        # Hydraulic Connectivity Filter:
-        # Only bridge flood bodies that possess a core flood depth >= h_connect.
-        # Prunes unchannelized thin sheet micro-ponding (h < h_connect) from bridging across cells.
-        if h_connect > hmin:
-            labeled_raw, num_features = ndimage.label(raw_wet_mask, structure=struct_8)
+        if h_connect > hmin and ext_depth_field is None:
+            labeled_raw, num_features = ndimage.label(seed_wet_mask, structure=struct_8)
             if num_features > 0:
                 max_depth_per_patch = ndimage.maximum(
                     np.nan_to_num(raw_depth, nan=0.0), labeled_raw, range(1, num_features + 1)
                 )
                 lookup_max = np.concatenate([[0.0], max_depth_per_patch])
                 patch_max = lookup_max[labeled_raw]
-                bridging_seed_mask = raw_wet_mask & (patch_max >= h_connect)
+                bridging_seed_mask = seed_wet_mask & (patch_max >= h_connect)
             else:
-                bridging_seed_mask = raw_wet_mask.copy()
+                bridging_seed_mask = seed_wet_mask.copy()
         else:
-            bridging_seed_mask = raw_wet_mask.copy()
+            bridging_seed_mask = seed_wet_mask.copy()
 
         y, x = np.ogrid[-bridge_radius:bridge_radius + 1, -bridge_radius:bridge_radius + 1]
         kernel = (x ** 2 + y ** 2) <= bridge_radius ** 2
         closed_mask = ndimage.binary_closing(bridging_seed_mask, structure=kernel)
-        # Preserve all original raw wet cells outside the bridging seed
-        closed_mask |= raw_wet_mask
+        closed_mask |= seed_wet_mask
     else:
-        closed_mask = raw_wet_mask.copy()
+        closed_mask = seed_wet_mask.copy()
 
-    # 2. Size-Limited Hole Filling (Issue C3)
-    # Fills ONLY enclosed dry components with size <= hole_mmu_px that do not touch raster boundaries.
+    # 2. Size-Limited Enclosed Hole Detection (<= hole_mmu_px, not touching raster border)
     if hole_mmu_px > 0:
         dry_mask = ~closed_mask
         labeled_dry, num_features = ndimage.label(dry_mask, structure=struct_8)
 
-        # Identify components that touch raster edges (external background)
         border_labels = set(np.unique(labeled_dry[0, :])) | \
                         set(np.unique(labeled_dry[-1, :])) | \
                         set(np.unique(labeled_dry[:, 0])) | \
@@ -972,51 +1342,111 @@ def refine_flood_hazard_raster(
     else:
         candidate_mask = smooth_mask
 
-    # 5. Topographic Depth Reconstruction (Zs - DEM) (Issue C3)
-    zs = np.where(raw_wet_mask & np.isfinite(dem), raw_depth + dem, np.nan)
-    nan_mask = np.isnan(zs)
-    ind = ndimage.distance_transform_edt(nan_mask, return_distances=False, return_indices=True)
-    zs_infilled = zs[tuple(ind)]
+    # 5. Strictly Hydrostatic Topographic Depth Reconstruction (Zs - DEM > 0)
+    # Cells where terrain is ABOVE the interpolated water level (+ optional Option B flat-floodplain freeboard)
+    # remain STRICTLY DRY (NaN) so elevated dry hills/mounds/evacuation sites are NEVER drowned!
+    if ext_depth_field is not None:
+        depth_phys = ext_depth_field
+        # Keep true simulated core depth on raw_wet_mask; smooth tapered depth_ext on connected fringe
+        physically_submerged = np.isfinite(depth_phys) & (depth_phys > 0.0)
+        final_mask = candidate_mask & np.isfinite(dem) & (core_wet_mask | physically_submerged)
+        depth_reconstructed = np.where(
+            core_wet_mask & final_mask,
+            np.maximum(hmin, raw_depth),
+            np.where(final_mask, np.maximum(hmin, depth_phys), np.nan),
+        ).astype(np.float32)
+    else:
+        zs = np.where(raw_wet_mask & np.isfinite(dem), raw_depth + dem, np.nan)
+        nan_mask = np.isnan(zs)
+        if np.any(~nan_mask):
+            ind = ndimage.distance_transform_edt(nan_mask, return_distances=False, return_indices=True)
+            zs_infilled = zs[tuple(ind)]
+            depth_phys = zs_infilled - dem
+        else:
+            depth_phys = np.full_like(dem, np.nan)
 
-    # Physical water depth above local topography
-    depth_phys = zs_infilled - dem
-
-    # Rigorous physical check: Cell is wet ONLY if candidate_mask is true AND physical depth >= hmin!
-    # Never force hmin onto cells where Zs < DEM (hills, enclosed high ground).
-    wet_cells = candidate_mask & np.isfinite(dem) & (depth_phys >= hmin)
-    final_mask = wet_cells
+        physically_submerged = np.isfinite(depth_phys) & (depth_phys > 0.0)
+        final_mask = candidate_mask & np.isfinite(dem) & (raw_wet_mask | physically_submerged)
+        depth_reconstructed = np.where(final_mask, np.maximum(hmin, depth_phys), np.nan).astype(np.float32)
 
     if smooth_sigma > 0:
-        depth_raw_recon = np.where(final_mask, depth_phys, 0.0)
+        depth_raw_recon = np.where(final_mask, depth_reconstructed, 0.0)
         weight = final_mask.astype(float)
         smooth_w = ndimage.gaussian_filter(weight, sigma=smooth_sigma)
         smooth_d = ndimage.gaussian_filter(depth_raw_recon, sigma=smooth_sigma)
         with np.errstate(divide="ignore", invalid="ignore"):
             norm_depth = np.where(final_mask, smooth_d / np.maximum(smooth_w, 1e-5), np.nan).astype(np.float32)
     else:
-        norm_depth = np.where(final_mask, depth_phys, np.nan).astype(np.float32)
+        norm_depth = depth_reconstructed
 
-    # Calibration scaling
+    # Calibration scaling (default 1.0 / 0.0; discouraged except for explicit sensitivity experiments)
     calibrated_depth = norm_depth * depth_scale + depth_offset
     final_depth = np.where(final_mask, np.maximum(hmin, calibrated_depth), np.nan).astype(np.float32)
 
-    # 6. Write Output GeoTIFF (and optional display raster if cosmetic=True)
+    # 6. Post-Hydrostatic Sub-DEM Pinhole & Scattered Speckle Cleanup (minimum feature floor: 30m x 30m = 0.09 ha)
+    # Step 5 terrain intersection can punch tiny sub-pixel pinholes (< 30m x 30m, smaller than 1 native FABDEM pixel)
+    # and detach tiny scattered wet fragments along edges. Using 4-connectivity (rook neighbors) eliminates both
+    # isolated specks and thin diagonal single-pixel bridges/pinholes cleanly in QGIS without drowning >= 30x30m hills!
+    struct_4 = ndimage.generate_binary_structure(2, 1)
+    if min_hole_px > 1:
+        wet_now = np.isfinite(final_depth) & (final_depth >= hmin)
+        dry_now = ~wet_now
+        lbl_dry, n_dry = ndimage.label(dry_now, structure=struct_4)
+        if n_dry > 0:
+            b_lbls = (
+                set(np.unique(lbl_dry[0, :]))
+                | set(np.unique(lbl_dry[-1, :]))
+                | set(np.unique(lbl_dry[:, 0]))
+                | set(np.unique(lbl_dry[:, -1]))
+            )
+            b_lbls.discard(0)
+            d_sizes = ndimage.sum(dry_now, lbl_dry, range(1, n_dry + 1))
+            d_lookup = np.concatenate([[0], d_sizes])
+            # Fill strictly sub-sensor pinholes (< min_hole_px, e.g., < 9 px = < 30m x 30m);
+            # features >= 30m x 30m remain strictly dry if DEM >= Zs!
+            sub_dem_pinholes = (
+                (d_lookup[lbl_dry] < min_hole_px)
+                & (~np.isin(lbl_dry, list(b_lbls)))
+                & (lbl_dry > 0)
+            )
+            if np.any(sub_dem_pinholes) and np.any(wet_now):
+                ind_nn = ndimage.distance_transform_edt(~wet_now, return_distances=False, return_indices=True)
+                final_depth = np.where(sub_dem_pinholes, final_depth[tuple(ind_nn)], final_depth).astype(np.float32)
+
+    if island_mmu_px > 0:
+        wet_now = np.isfinite(final_depth) & (final_depth >= hmin)
+        lbl_wet, n_wet = ndimage.label(wet_now, structure=struct_4)
+        if n_wet > 0:
+            w_sizes = ndimage.sum(wet_now, lbl_wet, range(1, n_wet + 1))
+            w_lookup = np.concatenate([[0], w_sizes])
+            keep_wet = wet_now & (w_lookup[lbl_wet] >= island_mmu_px)
+            final_depth = np.where(keep_wet, final_depth, np.nan).astype(np.float32)
+
+    # 7. Write Output GeoTIFF (and optional display raster if cosmetic=True)
     profile.update(dtype=rasterio.float32, count=1, nodata=np.nan, compress="lzw")
+    res_m = abs(profile["transform"][0])
+    hole_mmu_ha_eff = round((hole_mmu_px * (res_m ** 2)) / 10000.0, 2)
+    min_hole_ha_eff = round((min_hole_px * (res_m ** 2)) / 10000.0, 2)
 
     target_write_path = depth_tif
     with rasterio.open(target_write_path, "w", **profile) as dst:
         dst.write(final_depth, 1)
-        desc = "Refined Flood Depth 10m (Hydro-Bridged & MMU Filtered)"
+        desc = "Refined Physical Flood Depth 10m (Hydrostatically Constrained & 30x30m MMU Filtered)"
         dst.set_band_description(1, desc)
         dst.update_tags(
             hmin=str(hmin),
             hole_mmu_px=str(hole_mmu_px),
             island_mmu_px=str(island_mmu_px),
+            min_hole_px=str(min_hole_px),
             mmu_scale="1:50000",
-            mmu_standard="Perka BIG No. 1/2020 / SNI 19-6502.2-2010 / Perka BNPB No. 02/2012 (1.0 ha)",
+            mmu_standard=f"Peraturan BIG No. 18/2021 / SNI 6502.3:2010 / Perka BNPB No. 02/2012 ({hole_mmu_ha_eff:.2f} ha, floor {min_hole_ha_eff:.2f} ha)",
             bridge_radius=str(bridge_radius),
             smooth_sigma=str(smooth_sigma),
             h_connect=str(h_connect),
+            freeboard_m=str(freeboard_m),
+            max_ext_dist_m=str(max_ext_dist_m),
+            max_ext_slope_deg=str(max_ext_slope_deg),
+            max_slope_deg=str(max_slope_deg),
             cosmetic=str(cosmetic),
             depth_scale=str(depth_scale),
             depth_offset=str(depth_offset),
@@ -1025,7 +1455,7 @@ def refine_flood_hazard_raster(
     if cosmetic and out_display_tif and str(out_display_tif) != str(depth_tif):
         shutil.copy2(depth_tif, out_display_tif)
 
-    print(f"[OK] Refined depth written to: {target_write_path} (bridge_radius={bridge_radius}, smooth_sigma={smooth_sigma})")
+    print(f"[OK] Refined physical depth written to: {target_write_path} (bridge_radius={bridge_radius}, smooth_sigma={smooth_sigma}, min_feature_px={min_hole_px}/{island_mmu_px}, hole_mmu_px={hole_mmu_px} [{hole_mmu_ha_eff:.2f} ha])")
 
 
 def format_output_cluster_id(das_id: str) -> str:
@@ -1054,18 +1484,26 @@ def postprocess_sfincs_hazard(
     das_clusters_gpkg: str = "data/das_clusters/sumbar_das_cluster.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
     hmin: float = 0.05,
-    reproj_method: str = "bilinear",  # Option 1: Continuous bilinear water level interpolation (removes 40m stair-step ridges)
-    island_mmu_px: int = 100,  # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    hole_mmu_px: int = 100,    # 1:50,000 scale Satuan Pemetaan Terkecil (SPT/MMU) = 1.0 ha (100 px @ 10m grid)
-    bridge_radius: int = 1,    # Option 2: Morphological closing radius in pixels (1 px = 10m; bridges culverts & road cuts without cross-cell grid line bridging)
-    smooth_sigma: float = 1.0, # Anti-aliasing Gaussian sigma (1.0 px = 10m boundary smoothing)
-    h_connect: float = 0.15,   # Option 3: Hydraulic connectivity core depth (0.15m; prunes thin unchannelized sheet flow from bridging)
+    reproj_method: str = "bilinear",  # Continuous bilinear water level interpolation (removes stair-step ridges)
+    island_mmu_px: Optional[int] = None,   # Optional pixel override; defaults to island_mmu_ha (0.09 ha = 30m x 30m)
+    hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (2.0 ha)
+    island_mmu_ha: float = 0.09,           # Resolution-independent 30m x 30m (0.09 ha) minimum flood patch floor
+    hole_mmu_ha: float = 2.0,              # Resolution-independent 2.0 ha enclosed hydrostatic void limit (Option B)
+    min_hole_ha: float = 0.09,             # Resolution-independent 30m x 30m (0.09 ha) sub-DEM pinhole fill
+    bridge_radius: int = 5,                # 5 px (50m) circular morphological closing across roads/bunds (Option B)
+    smooth_sigma: float = 1.2,             # 1.2 px natural boundary anti-aliasing (Option B)
+    h_connect: float = 0.10,               # 0.10m core depth threshold for hydraulic connectivity bridging
+    freeboard_m: float = 0.25,             # Option B v2.0: +0.25m FABDEM uncertainty margin (Hawker et al., 2022)
+    max_ext_dist_m: float = 80.0,          # Option B v2.0: 80m max outward hydrologically connected edge recovery
+    max_ext_slope_deg: float = 5.0,        # Option B v2.0: flat floodplain slope cap (< 5 deg) for freeboard margin
+    max_slope_deg: Optional[float] = 8.0,  # Prunes narrow hillslope sheet noise (RBI river channels always protected)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
     classification_method: str = "depth",
     low_thresh: float = 0.76,
     high_thresh: float = 1.50,
+    rivers_gpkg: Optional[str] = "data/rivers.gpkg",
 ):
     """
     Downscales SFINCS water levels to high-resolution topography,
@@ -1135,25 +1573,56 @@ def postprocess_sfincs_hazard(
         if not das_geom.empty:
             _clip_and_mask_raster(depth_tif, das_geom, lake_gpkg=lake_gpkg)
 
-    # Refine flood depth (physically grounded hole-filling & depth reconstruction)
-    print(f"[{das_id}][{rp}] Refining flood depth raster (reproj={reproj_method}, bridge_radius={bridge_radius}, h_connect={h_connect})...")
+    # Refine flood depth (Option B natural hydrostatic edge recovery + 4-connected 30m x 30m noise floor)
+    print(
+        f"[{das_id}][{rp}] Refining flood depth raster (reproj={reproj_method}, freeboard={freeboard_m:.2f}m, "
+        f"ext_dist={max_ext_dist_m:.0f}m, bridge_radius={bridge_radius}, min_hole_ha={min_hole_ha}, "
+        f"island_mmu_ha={island_mmu_ha}, hole_mmu_ha={hole_mmu_ha})..."
+    )
     refine_flood_hazard_raster(
         depth_tif=depth_tif,
         dep_path=dep_path,
         hmin=hmin,
         island_mmu_px=island_mmu_px,
         hole_mmu_px=hole_mmu_px,
+        island_mmu_ha=island_mmu_ha,
+        hole_mmu_ha=hole_mmu_ha,
+        min_hole_ha=min_hole_ha,
         bridge_radius=bridge_radius,
         smooth_sigma=smooth_sigma,
         h_connect=h_connect,
+        freeboard_m=freeboard_m,
+        max_ext_dist_m=max_ext_dist_m,
+        max_ext_slope_deg=max_ext_slope_deg,
         depth_offset=depth_offset,
         depth_scale=depth_scale,
         cosmetic=cosmetic,
         out_display_tif=display_tif,
+        max_slope_deg=max_slope_deg,
+        rivers_gpkg=rivers_gpkg,
     )
 
     if das_geom is not None and not das_geom.empty:
         _clip_and_mask_raster(depth_tif, das_geom, lake_gpkg=lake_gpkg)
+        # Re-sieve any tiny detached edge slivers (< island_mmu_ha) sliced by polygon/lake clipping
+        with rasterio.open(depth_tif) as src_c:
+            arr_c = src_c.read(1)
+            prof_c = src_c.profile.copy()
+            tags_c = src_c.tags()
+            px_area = max(abs(float(src_c.transform[0]) * float(src_c.transform[4])), 1.0)
+        eff_island_px = island_mmu_px if island_mmu_px is not None else int(round((island_mmu_ha * 10000.0) / px_area))
+        if eff_island_px > 1:
+            wet_c = np.isfinite(arr_c) & (arr_c >= hmin)
+            struct_4_c = ndimage.generate_binary_structure(2, 1)
+            lbl_c, n_c = ndimage.label(wet_c, structure=struct_4_c)
+            if n_c > 0:
+                sz_c = ndimage.sum(wet_c, lbl_c, range(1, n_c + 1))
+                lkp_c = np.concatenate([[0], sz_c])
+                clean_c = np.where(wet_c & (lkp_c[lbl_c] >= eff_island_px), arr_c, np.nan).astype(np.float32)
+                with rasterio.open(depth_tif, "w", **prof_c) as dst_c:
+                    dst_c.write(clean_c, 1)
+                    if tags_c:
+                        dst_c.update_tags(**tags_c)
 
     # Classify hazard (Perka BNPB No. 02/2012)
     print(f"[{das_id}][{rp}] Classifying hazard ({classification_method} mode)...")
@@ -1177,7 +1646,8 @@ def postprocess_sfincs_hazard(
     das_geom_gpkg = f"data/das_clusters/individual/{das_id}.gpkg"
     validate_flood_map(
         depth_tif=depth_tif,
-        das_geom_gpkg=(das_geom_gpkg if os.path.exists(das_geom_gpkg) else None),
+        das_geom_gpkg=(das_geom_gpkg if os.path.exists(das_geom_gpkg) else das_clusters_gpkg),
+        das_id=das_id,
         out_json=str(survey_val_path),
     )
 

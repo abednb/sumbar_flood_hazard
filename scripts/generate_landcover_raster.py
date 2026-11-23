@@ -14,6 +14,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -25,8 +26,9 @@ script_dir = Path(__file__).resolve().parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 import _env
+from geo_utils import resolve_target_crs
 
-TARGET_CRS = "EPSG:32747"
+TARGET_CRS = "auto"
 
 # Standard Manning n mapping based on Chow (1959) and Arcement & Schneider (1989)
 # Macro-roughness for dense urban structures follows standard 2D flood practice (n = 0.120)
@@ -194,18 +196,25 @@ def build_manning_lookup_table(
 
 def generate_landcover_raster(
     rbi_gpkg: str = "data_raw/rbi/landcover.gpkg",
-    layer: str = "lc_sumbar_lok26",
-    ref_dem: str = "data/fabdem_reprojected.tif",
+    layer: Optional[str] = "auto",
+    ref_dem: str = "data_raw/fabdem/FABDEM30m_Sumbar.tif",
     out_raster: str = "data/landcover_rbi.tif",
     out_lookup: str = "lookup_tables/manning_lookup.csv",
     resolution: float = 30.0,
+    target_crs: str = TARGET_CRS,
 ) -> Path:
     """
-    Rasterizes the vector RBI land cover onto a regular grid snapped to the reference DEM.
+    Rasterizes the vector RBI land cover onto a regular grid aligned to the reference DEM bounds.
+    Automatically detects Indonesian UTM CRS (`target_crs="auto"`) and auto-selects the first
+    layer in any Kabupaten landcover.gpkg (`layer="auto"`).
     """
+    from rasterio.warp import transform_bounds
+
     t_start = time.time()
     rbi_path = Path(rbi_gpkg).resolve()
     dem_path = Path(ref_dem).resolve()
+    if not dem_path.exists() and Path("data/fabdem_reprojected.tif").exists():
+        dem_path = Path("data/fabdem_reprojected.tif").resolve()
     out_raster_path = Path(out_raster).resolve()
     out_lookup_path = Path(out_lookup).resolve()
 
@@ -214,12 +223,18 @@ def generate_landcover_raster(
     if not dem_path.exists():
         raise FileNotFoundError(f"Reference DEM not found at {dem_path}")
 
-    print(f"=== Generating Harmonized RBI Land-Cover Raster ({resolution}m) ===")
-    print(f"Loading vector layer '{layer}' from {rbi_path}...")
-    gdf = gpd.read_file(rbi_path, layer=layer)
-    if str(gdf.crs) != TARGET_CRS:
-        print(f"Reprojecting RBI layer from {gdf.crs} to {TARGET_CRS}...")
-        gdf = gdf.to_crs(TARGET_CRS)
+    resolved_crs = resolve_target_crs(target_crs, dem_path)
+
+    print(f"=== Generating Harmonized RBI Land-Cover Raster ({resolution}m, {resolved_crs}) ===")
+    if layer is None or str(layer).strip().lower() == "auto":
+        print(f"Loading default vector layer from {rbi_path}...")
+        gdf = gpd.read_file(rbi_path)
+    else:
+        print(f"Loading vector layer '{layer}' from {rbi_path}...")
+        gdf = gpd.read_file(rbi_path, layer=layer)
+    if str(gdf.crs) != resolved_crs:
+        print(f"Reprojecting RBI layer from {gdf.crs} to {resolved_crs}...")
+        gdf = gdf.to_crs(resolved_crs)
 
     # Clean classes and build integer ID lookup
     unique_raw_classes = sorted(gdf["REMARK"].dropna().unique().tolist())
@@ -228,19 +243,22 @@ def generate_landcover_raster(
 
     gdf["rbi_id"] = gdf["REMARK"].map(class_to_id).fillna(0).astype("uint8")
 
-    # Compute target raster grid aligned and snapped to DEM bounds
+    # Compute target raster grid aligned to DEM bounds in resolved_crs
     with rasterio.open(dem_path) as src_dem:
-        dem_bounds = src_dem.bounds
+        if str(src_dem.crs) != resolved_crs:
+            left, bottom, right, top = transform_bounds(src_dem.crs, resolved_crs, *src_dem.bounds)
+        else:
+            left, bottom, right, top = src_dem.bounds
 
-    minx = dem_bounds.left
-    maxy = dem_bounds.top
-    maxx = minx + np.ceil((dem_bounds.right - minx) / resolution) * resolution
-    miny = maxy - np.ceil((maxy - dem_bounds.bottom) / resolution) * resolution
+    minx = np.floor(left / resolution) * resolution
+    maxy = np.ceil(top / resolution) * resolution
+    maxx = minx + np.ceil((right - minx) / resolution) * resolution
+    miny = maxy - np.ceil((maxy - bottom) / resolution) * resolution
     width = int((maxx - minx) / resolution)
     height = int((maxy - miny) / resolution)
     transform = rasterio.transform.from_bounds(minx, miny, maxx, maxy, width, height)
 
-    print(f"Target grid: {width} x {height} cells @ {resolution}m ({TARGET_CRS})")
+    print(f"Target grid: {width} x {height} cells @ {resolution}m ({resolved_crs})")
     print(f"Rasterizing {len(gdf)} features...")
 
     shapes = ((geom, val) for geom, val in zip(gdf.geometry, gdf["rbi_id"]) if geom is not None and not geom.is_empty)
@@ -263,7 +281,7 @@ def generate_landcover_raster(
         "width": width,
         "height": height,
         "count": 1,
-        "crs": TARGET_CRS,
+        "crs": resolved_crs,
         "transform": transform,
         "tiled": True,
         "blockxsize": 512,
@@ -274,7 +292,7 @@ def generate_landcover_raster(
 
     with rasterio.open(out_raster_path, "w", **profile) as dst:
         dst.write(raster_data, 1)
-        dst.set_band_description(1, "BIG RBI Land Cover Integer Class ID (Sumatera Barat)")
+        dst.set_band_description(1, "BIG RBI Land Cover Integer Class ID")
 
     print(f"[OK] GeoTIFF written successfully to: {out_raster_path}")
     return out_raster_path
@@ -283,11 +301,12 @@ def generate_landcover_raster(
 def main():
     parser = argparse.ArgumentParser(description="Rasterize BIG RBI land cover and create Manning lookup table.")
     parser.add_argument("--rbi", default="data_raw/rbi/landcover.gpkg", help="Path to RBI landcover GPKG")
-    parser.add_argument("--layer", default="lc_sumbar_lok26", help="Layer name in GPKG")
-    parser.add_argument("--dem", default="data/fabdem_reprojected.tif", help="Reference DEM for spatial bounds")
+    parser.add_argument("--layer", default="auto", help="Layer name in GPKG (or 'auto' for default layer)")
+    parser.add_argument("--dem", default="data_raw/fabdem/FABDEM30m_Sumbar.tif", help="Reference DEM for spatial bounds")
     parser.add_argument("--out-raster", default="data/landcover_rbi.tif", help="Output GeoTIFF path")
     parser.add_argument("--out-lookup", default="lookup_tables/manning_lookup.csv", help="Output lookup CSV path")
     parser.add_argument("--res", type=float, default=30.0, help="Grid resolution in meters (default: 30m)")
+    parser.add_argument("--crs", default=TARGET_CRS, help="Target projected CRS or 'auto' for Indonesian UTM (default: auto)")
     args = parser.parse_args()
 
     generate_landcover_raster(
@@ -297,6 +316,7 @@ def main():
         out_raster=args.out_raster,
         out_lookup=args.out_lookup,
         resolution=args.res,
+        target_crs=args.crs,
     )
 
 

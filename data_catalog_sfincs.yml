@@ -2,16 +2,14 @@
 # Author: Sumatra Barat Flood Hazard Modeling Team
 
 fabdem_sumbar:
-  path: data/fabdem_reprojected.tif
+  path: data_raw/fabdem/FABDEM30m_Sumbar.tif
   data_type: RasterDataset
   driver: raster
-  crs: 32747
 
 elevation_dem:
-  path: data/fabdem_reprojected.tif
+  path: data_raw/fabdem/FABDEM30m_Sumbar.tif
   data_type: RasterDataset
   driver: raster
-  crs: 32747
 
 rbi_river_sumbar:
   path: data/rivers.gpkg
