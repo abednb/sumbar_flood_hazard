@@ -65,17 +65,17 @@ To run and inspect a single basin cluster (e.g., `DAS_106` or `DAS_101` for `rp1
 1. Open [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/master/01_sfincs_flood_hazard_run.ipynb).
 2. Select the **`.venv`** (or **`HydroMT-SFINCS`**) Python kernel in the top-right corner of VS Code.
 3. Choose your build configuration in **Cell 1 (User Configuration Control Panel)**:
-   * **Standard 40 m flux mesh / 10 m subgrid (Final Quality)**: `CONFIG_FILE = "configs/sfincs_standalone_build.yml"`
-   * **High-speed 80 m flux mesh / 10 m subgrid (~15×–29× faster screening)**: `CONFIG_FILE = "configs/sfincs_standalone_build_80m_fast.yml"`
+   * **Recommended Default — 80 m flux mesh / 10 m subgrid V3 (13× faster, `F1=0.91` vs. 40 m)**: `CONFIG_FILE = "configs/sfincs_standalone_build_80m_fast.yml"`
+   * **High-Resolution Urban Option — 40 m flux mesh / 10 m subgrid**: `CONFIG_FILE = "configs/sfincs_standalone_build.yml"` *(use `FREEBOARD_M = 0.25`, `MAX_EXT_DIST_M = 80.0`, `BRIDGE_RADIUS = 5`)*
 4. Run the cells in sequence:
-   * **Cell 1 (User Configuration Control Panel)**: Set target cluster(s) and return period(s). National v2.0 defaults are pre-configured: `STORM_HOURS = 24`, `RECESSION_HOURS = None` (auto-scales `24/36/48 h` by catchment area), `INFILTRATION_MODE = 'cnb'`, `COASTAL_MHHW_M = 0.80`, and **Option B** post-processing (`FREEBOARD_M = 0.25`, `MAX_EXT_DIST_M = 80.0`, `MAX_EXT_SLOPE_DEG = 5.0`, `BRIDGE_RADIUS = 5`, `HOLE_MMU_HA = 2.0`, `ISLAND_MMU_HA = 0.09`, `MIN_HOLE_HA = 0.09`, `SMOOTH_SIGMA = 1.2`).
+   * **Cell 1 (User Configuration Control Panel)**: Set target cluster(s) and return period(s). National v2.0 **`80 m V3`** defaults are pre-configured: `STORM_HOURS = 24`, `RECESSION_HOURS = None` (auto-scales `24/36/48 h` by catchment area), `INFILTRATION_MODE = 'cnb'`, `COASTAL_MHHW_M = 0.80`, and **80 m V3 Option B** post-processing (`FREEBOARD_M = 0.35`, `MAX_EXT_DIST_M = 120.0`, `MAX_EXT_SLOPE_DEG = 5.0`, `BRIDGE_RADIUS = 6`, `HOLE_MMU_HA = 2.0`, `ISLAND_MMU_HA = 0.09`, `MIN_HOLE_HA = 0.09`, `SMOOTH_SIGMA = 1.2`).
    * **Cell 2 (Environment & Data Verification)**: Loads `_env.py` PROJ/GDAL bindings and `sfincs_standalone_pipeline`.
    * **Cell 3 (Step 1: Base SFINCS Mesh)**: Extracts the on-the-fly 10 m DEM chip from native 30 m FABDEM, strictly masks active cells to `das_region` (`msk=0` outside basin), burns silted river channels enhanced with `rivers_ar.gpkg` (`n = 0.045`), applies RBI Manning roughness, injects inland `msk=3` outlets, and runs build-time QA.
    * **Cell 4 (Step 2: Direct Rainfall, CNB & Coastal MHHW Forcing)**: Applies the 24 h design hyetograph padded with dynamic zero-intensity recession hours, injects verified `CNB` Curve Number maps (`smaxfile`/`sefffile`/`ksfile`), and applies `+0.80 m` coastal MHHW tidal backwater (`sfincs.bnd`/`sfincs.bzs`) on coastal domains (`alpha=0.65`, `huthresh=0.02`, `viscosity=0`).
    * **Cell 5 (Step 3: Run SFINCS Solver)**: Launches native `bin/sfincs.exe` with live progress tracking.
    * **Cell 6 (Step 4: Option B Post-Processing, Subgrid QA & Validation)**:
      - Downscales water surface elevations ($z_s$) bilinearly onto 10 m subgrid topography.
-     - Applies **Option B Hydrostatically Connected Natural Floodplain Margin** (`+0.25 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 80 m`, keeping elevated hills and steep slopes strictly dry).
+     - Applies **Option B (80 m V3) Hydrostatically Connected Natural Floodplain Margin** (`+0.35 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 120 m`, `bridge_radius=6`, keeping elevated hills and steep slopes strictly dry; or `+0.25 m / ≤ 80 m / r=5` on optional 40 m runs).
      - Enforces a **4-connected `30 m × 30 m` (`0.09 ha`) pinhole & speck floor** (`island_mmu_ha=0.09`, `min_hole_ha=0.09`, `hole_mmu_ha=2.0`; **Peraturan BIG No. 18/2021**, **SNI 6502.3:2010**, **Perka BNPB No. 02/2012**) while protecting mapped RBI rivers from steep-slope pruning.
      - Classifies hazard levels (*Rendah*, *Sedang*, *Tinggi*) per **Perka BNPB No. 02/2012** and writes companion QGIS `.qml` styles.
      - Automatically runs QA gates with **exact subgrid hypsometric volume balance** (`qa_report.json`) and outlier-screened QField validation (`survey_validation.json`).

@@ -37,17 +37,17 @@ from scripts.sfincs_standalone_pipeline import build_sfincs_standalone
 model_root = build_sfincs_standalone(
     das_id="DAS_101",
     output_dir="models_sfincs_standalone",
-    config_fn="configs/sfincs_standalone_build.yml",
+    config_fn="configs/sfincs_standalone_build_80m_fast.yml",
     data_catalog_fn="data_catalog_sfincs.yml",
     das_clusters_gpkg="data/das_clusters/sumbar_das_cluster.gpkg",
     force_overwrite=True,
 )
 ```
 
-**Underlying Physics & QA Gates (National v2.0 Standard)**:
+**Underlying Physics & QA Gates (National v2.0 Standard — 80 m V3 Default)**:
 - **Indonesian Auto-UTM**: Automatic UTM zone detection (`EPSG:32646–32754` via `scripts/geo_utils.py`).
 - **Active Watershed Mask**: Strictly bounded to `das_region` (`setup_mask_active: mask: das_region, reset_mask: true`) so outside-basin and ocean cells remain inactive (`msk=0`) and inland outlets receive `msk=3`.
-- **Subgrid Hypsometry**: 40 m (or 80 m fast mode) computational flux mesh with 10 m subgrid elevation tables derived from native 30 m FABDEM via on-the-fly `WarpedVRT`.
+- **Subgrid Hypsometry**: 80 m V3 default (or optional 40 m) computational flux mesh with 10 m subgrid elevation tables derived from native 30 m FABDEM via on-the-fly `WarpedVRT`.
 - **Manning Roughness**: Integer-coded BIG RBI land cover (`data/landcover_rbi.tif`) with `lookup_tables/manning_lookup.csv` & canonical 15-class `lookup_tables/national_rbi_lookup.csv`.
 - **Silted River Burning**: River centerlines enhanced with BIG RBI polygon river widths (`data/rivers_ar.gpkg`) burned into subgrid hypsometry (`rivwth: 8/15/22 m`, `rivdph: 0.35/0.55/0.80 m`, `manning=0.045`).
 - **CNB Infiltration**: SFINCS `v2.4.0+` Curve Number with Recovery (`smaxfile`/`sefffile`/`ksfile` in meters from `data/cn_amc2_100m.tif` & `data/cn_amc3_100m.tif`; NEVER use legacy `scsfile` in `v2.4.0`!).
@@ -106,7 +106,7 @@ run_sfincs_model(
 ---
 
 ### Step 4: Option B Natural Hydrostatic Downscaling & BNPB Classification
-Downscale water surface elevations ($z_s$) to 10 m topography, apply **Option B Hydrostatically Connected Natural Floodplain Margin (`+0.25 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 80 m`)** + **4-connected `30 m × 30 m` (`0.09 ha`) pinhole/speck floor**, and classify according to Perka BNPB No. 02/2012:
+Downscale water surface elevations ($z_s$) to 10 m topography, apply **Option B Hydrostatically Connected Natural Floodplain Margin (`80 m V3` default: `+0.35 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 120 m`, `bridge_radius=6`; or `+0.25 m / ≤ 80 m / r=5` for optional 40 m mesh)** + **4-connected `30 m × 30 m` (`0.09 ha`) pinhole/speck floor**, and classify according to Perka BNPB No. 02/2012:
 
 ```python
 from scripts.sfincs_standalone_pipeline import postprocess_sfincs_hazard
@@ -117,13 +117,13 @@ postprocess_sfincs_hazard(
     base_model_dir="models_sfincs_standalone",
     output_maps_dir="outputs",
     hmin=0.05,
-    freeboard_m=0.25,
-    max_ext_dist_m=80.0,
+    freeboard_m=0.35,
+    max_ext_dist_m=120.0,
     max_ext_slope_deg=5.0,
     hole_mmu_ha=2.0,
     island_mmu_ha=0.09,
     min_hole_ha=0.09,
-    bridge_radius=5,
+    bridge_radius=6,
     smooth_sigma=1.2,
     cosmetic=False,
     classification_method="depth",

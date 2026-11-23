@@ -555,7 +555,7 @@ rainfall_rp100:
 def build_sfincs_standalone(
     das_id: str,
     output_dir: str = "models_sfincs_standalone",
-    config_fn: str = "configs/sfincs_standalone_build.yml",
+    config_fn: str = "configs/sfincs_standalone_build_80m_fast.yml",
     data_catalog_fn: str = "data_catalog_sfincs.yml",
     das_clusters_gpkg: str = "data/das_clusters/sumbar_das_cluster.gpkg",
     admin_boundary_gpkg: Optional[str] = None,
@@ -1488,14 +1488,14 @@ def postprocess_sfincs_hazard(
     island_mmu_px: Optional[int] = None,   # Optional pixel override; defaults to island_mmu_ha (0.09 ha = 30m x 30m)
     hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (2.0 ha)
     island_mmu_ha: float = 0.09,           # Resolution-independent 30m x 30m (0.09 ha) minimum flood patch floor
-    hole_mmu_ha: float = 2.0,              # Resolution-independent 2.0 ha enclosed hydrostatic void limit (Option B)
+    hole_mmu_ha: float = 2.0,              # Resolution-independent 2.0 ha enclosed hydrostatic void limit (Option B V3)
     min_hole_ha: float = 0.09,             # Resolution-independent 30m x 30m (0.09 ha) sub-DEM pinhole fill
-    bridge_radius: int = 5,                # 5 px (50m) circular morphological closing across roads/bunds (Option B)
-    smooth_sigma: float = 1.2,             # 1.2 px natural boundary anti-aliasing (Option B)
+    bridge_radius: int = 6,                # 6 px (60m) circular morphological closing across roads/bunds (80m V3)
+    smooth_sigma: float = 1.2,             # 1.2 px natural boundary anti-aliasing (Option B V3)
     h_connect: float = 0.10,               # 0.10m core depth threshold for hydraulic connectivity bridging
-    freeboard_m: float = 0.25,             # Option B v2.0: +0.25m FABDEM uncertainty margin (Hawker et al., 2022)
-    max_ext_dist_m: float = 80.0,          # Option B v2.0: 80m max outward hydrologically connected edge recovery
-    max_ext_slope_deg: float = 5.0,        # Option B v2.0: flat floodplain slope cap (< 5 deg) for freeboard margin
+    freeboard_m: float = 0.35,             # 80m V3: +0.35m FABDEM uncertainty margin (< 0.50m MAE, Hawker et al., 2022)
+    max_ext_dist_m: float = 120.0,         # 80m V3: 120m (1.5 x dx) hydrologically connected edge recovery
+    max_ext_slope_deg: float = 5.0,        # 80m V3: flat floodplain slope cap (< 5 deg) for freeboard margin
     max_slope_deg: Optional[float] = 8.0,  # Prunes narrow hillslope sheet noise (RBI river channels always protected)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,

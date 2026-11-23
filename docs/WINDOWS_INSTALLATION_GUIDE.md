@@ -131,13 +131,13 @@ When running [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/ma
 * **Cell 2 — Environment & Data Verification**:
   Dynamically binds PROJ/GDAL paths from the active virtual environment and imports `sfincs_standalone_pipeline`.
 * **Cell 3 (Step 1) — Build SFINCS Base Grids**:
-  Extracts a masked `40 m` (or `80 m` fast mode) computational domain, derives 10 m subgrid tables on-the-fly from native 30 m FABDEM, burns silted rivers enhanced with `rivers_ar.gpkg`, and applies distributed Manning roughness from BIG RBI Land Cover.
+  Extracts a masked **`80 m` V3 default** (or optional `40 m`) computational domain, derives 10 m subgrid tables on-the-fly from native 30 m FABDEM, burns silted rivers enhanced with `rivers_ar.gpkg`, and applies distributed Manning roughness from BIG RBI Land Cover.
 * **Cell 4 (Step 2) — Apply Direct Rainfall, CNB & Coastal MHHW Forcing**:
   Binds 24-hour design storm hyetographs (`rainfall_<rp>.nc`) with dynamic zero-rain recession (`24–48 h`), applies USDA-NRCS `CNB` Curve Number infiltration (`smaxfile`/`sefffile`/`ksfile`), and sets `+0.80 m` coastal MHHW tidal backwater on coastal domains.
 * **Cell 5 (Step 3) — Run SFINCS Hydrodynamic Simulation Engine**:
   Executes the 2D solver with an interactive terminal progress bar (automatically selecting native `bin/sfincs.exe` or Docker fallback).
 * **Cell 6 (Step 4) — Option B Post-Processing, Subgrid QA & BNPB Classification**:
-  Downscales water surface elevation to 10 m, applies the **Option B `+0.25 m` FABDEM flat-floodplain margin** (`< 5°`, `≤ 80 m`) and **4-connected `30 m × 30 m` floor**, computes continuous **Flood Hazard Index (0 to 1)** and **Perka BNPB No. 02/2012** classes, and runs automated subgrid hypsometric QA + QField validation.
+  Downscales water surface elevation to 10 m, applies the **`80 m V3` Option B `+0.35 m` FABDEM flat-floodplain margin** (`< 5°`, `≤ 120 m`, `bridge_radius=6`) and **4-connected `30 m × 30 m` floor**, computes continuous **Flood Hazard Index (0 to 1)** and **Perka BNPB No. 02/2012** classes, and runs automated subgrid hypsometric QA + QField validation.
 * **Cell 7 (Step 5) — Quick GIS Visualization & QA/QC**:
   Renders a publication-ready 3-panel verification figure (10m Flood Depth, Continuous FHI, and BNPB 3-Class Map).
 * **Cell 8 (Step 6) — Flood Wave Propagation Animation**:
