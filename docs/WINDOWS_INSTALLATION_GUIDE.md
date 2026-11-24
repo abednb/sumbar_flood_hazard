@@ -136,8 +136,8 @@ When running [`notebook/master/01_sfincs_flood_hazard_run.ipynb`](../notebook/ma
   Binds 24-hour design storm hyetographs (`rainfall_<rp>.nc`) with dynamic zero-rain recession (`24–48 h`), applies USDA-NRCS `CNB` Curve Number infiltration (`smaxfile`/`sefffile`/`ksfile`), and sets `+0.80 m` coastal MHHW tidal backwater on coastal domains.
 * **Cell 5 (Step 3) — Run SFINCS Hydrodynamic Simulation Engine**:
   Executes the 2D solver with an interactive terminal progress bar (automatically selecting native `bin/sfincs.exe` or Docker fallback).
-* **Cell 6 (Step 4) — Option B Post-Processing, Subgrid QA & BNPB Classification**:
-  Downscales water surface elevation to 10 m, applies the **`80 m V3` Option B `+0.35 m` FABDEM flat-floodplain margin** (`< 5°`, `≤ 120 m`, `bridge_radius=6`) and **4-connected `30 m × 30 m` floor**, computes continuous **Flood Hazard Index (0 to 1)** and **Perka BNPB No. 02/2012** classes, and runs automated subgrid hypsometric QA + QField validation.
+* **Cell 6 (Step 4) — Strict Hydrostatic Post-Processing (15 cm Floor), Subgrid QA & BNPB Classification**:
+  Downscales water surface elevation to 10 m, removes all pixels below **`MIN_FLOOD_DEPTH_M = 0.15 m` (15 cm)** across Depth, FHI, and Classes, applies pure bilinear edge-NaN recovery (`freeboard_m=0.0`, `≤ 80 m`, `bridge_radius=3`) and the **4-connected `30 m × 30 m` floor** (`hole_mmu_ha=1.0`), computes official **Perka BNPB No. 02/2012** classes + continuous **Flood Hazard Index (0 to 1)**, and runs automated subgrid hypsometric QA + QField validation.
 * **Cell 7 (Step 5) — Quick GIS Visualization & QA/QC**:
   Renders a publication-ready 3-panel verification figure (10m Flood Depth, Continuous FHI, and BNPB 3-Class Map).
 * **Cell 8 (Step 6) — Flood Wave Propagation Animation**:

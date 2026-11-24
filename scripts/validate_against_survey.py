@@ -67,7 +67,7 @@ def validate_flood_map(
     das_geom_gpkg: Optional[str] = None,
     das_id: Optional[str] = None,
     survey_gpkg: Optional[str] = None,
-    hmin: float = 0.05,
+    hmin: float = 0.15,
     max_valid_depth_m: float = 8.0,
     out_json: Optional[str] = None,
 ) -> Dict[str, Any]:

@@ -212,3 +212,26 @@ def test_release_hydromt_log_handlers_prevents_winerror32(tmp_path):
     # On Windows this raises PermissionError [WinError 32] if the handler was not closed
     log_path.unlink()
     assert not log_path.exists()
+
+
+def test_strict_scientific_defaults_no_synthetic_inflation():
+    """Verify strict scientific & regulatory defaults prevent synthetic freeboard inflation and CNB double-counting."""
+    import inspect
+    from scripts.sfincs_standalone_pipeline import (
+        _apply_cnb_infiltration_to_case,
+        postprocess_sfincs_hazard,
+    )
+
+    cnb_sig = inspect.signature(_apply_cnb_infiltration_to_case)
+    assert cnb_sig.parameters["initial_sat_frac"].default == 0.0, "CNB must default to initial_sat_frac=0.0 to avoid double-counting AMC!"
+
+    pp_sig = inspect.signature(postprocess_sfincs_hazard)
+    assert pp_sig.parameters["hmin"].default == 0.15
+    assert pp_sig.parameters["h_connect"].default == 0.15
+    assert pp_sig.parameters["freeboard_m"].default == 0.0
+    assert pp_sig.parameters["max_ext_dist_m"].default == 80.0
+    assert pp_sig.parameters["bridge_radius"].default == 3
+    assert pp_sig.parameters["hole_mmu_ha"].default == 1.0
+    assert pp_sig.parameters["smooth_sigma"].default == 1.0
+    assert pp_sig.parameters["island_mmu_ha"].default == 0.09
+    assert pp_sig.parameters["min_hole_ha"].default == 0.09

@@ -105,8 +105,8 @@ run_sfincs_model(
 
 ---
 
-### Step 4: Option B Natural Hydrostatic Downscaling & BNPB Classification
-Downscale water surface elevations ($z_s$) to 10 m topography, apply **Option B Hydrostatically Connected Natural Floodplain Margin (`80 m V3` default: `+0.35 m` FABDEM uncertainty margin strictly gated to connected flat `< 5°` plains within `≤ 120 m`, `bridge_radius=6`; or `+0.25 m / ≤ 80 m / r=5` for optional 40 m mesh)** + **4-connected `30 m × 30 m` (`0.09 ha`) pinhole/speck floor**, and classify according to Perka BNPB No. 02/2012:
+### Step 4: Strict Hydrostatic Downscaling (15 cm Floor) & BNPB Classification
+Downscale water surface elevations ($z_s$) to 10 m topography, strictly remove all depths `< 0.15 m` (15 cm) across Depth, FHI, and Classes (Wing et al., 2018; Sampson et al., 2015; Bates et al., 2021), apply **pure bilinear edge-NaN recovery (`freeboard_m = 0.0`, `max_ext_dist_m = 80.0 m`, `bridge_radius = 3`, `hole_mmu_ha = 1.0`, `smooth_sigma = 1.0`)** + **4-connected `30 m × 30 m` (`0.09 ha`) native FABDEM floor**, and classify according to Perka BNPB No. 02/2012:
 
 ```python
 from scripts.sfincs_standalone_pipeline import postprocess_sfincs_hazard
@@ -116,23 +116,22 @@ postprocess_sfincs_hazard(
     rp="rp100",
     base_model_dir="models_sfincs_standalone",
     output_maps_dir="outputs",
-    hmin=0.05,
-    freeboard_m=0.35,
-    max_ext_dist_m=120.0,
-    max_ext_slope_deg=5.0,
-    hole_mmu_ha=2.0,
+    hmin=0.15,
+    freeboard_m=0.0,
+    max_ext_dist_m=80.0,
+    hole_mmu_ha=1.0,
     island_mmu_ha=0.09,
     min_hole_ha=0.09,
-    bridge_radius=6,
-    smooth_sigma=1.2,
+    bridge_radius=3,
+    smooth_sigma=1.0,
     cosmetic=False,
     classification_method="depth",
 )
 ```
 
-**Hazard Tiers (Perka BNPB No. 02/2012)**:
-- **Class 0 (Dry / Unflooded)**: $h < 0.05\text{ m}$
-- **Class 1 (Rendah / Low Hazard)**: $0.05\text{ m} \le h < 0.76\text{ m}$
+**Hazard Tiers (Perka BNPB No. 02/2012 + 15 cm Minimum Flood Depth Cutoff)**:
+- **Class 0 (Dry / Below 15 cm Hazard Cutoff)**: $h < 0.15\text{ m}$
+- **Class 1 (Rendah / Low Hazard)**: $0.15\text{ m} \le h < 0.76\text{ m}$
 - **Class 2 (Sedang / Medium Hazard)**: $0.76\text{ m} \le h \le 1.50\text{ m}$
 - **Class 3 (Tinggi / High Hazard)**: $h > 1.50\text{ m}$
 

@@ -160,3 +160,50 @@ def test_classify_and_style_generation(tmp_path):
     assert qml_fhi.exists()
     assert "#34A853" in qml_hazard.read_text(encoding="utf-8")
     assert "#EA4335" in qml_fhi.read_text(encoding="utf-8")
+
+
+def test_default_15cm_minimum_depth_removes_subthreshold_in_classes_and_fhi(tmp_path):
+    """Verify default hmin=0.15m (15 cm) removes all pixels < 0.15m from Classes and FHI rasters."""
+    import rasterio
+    from rasterio.transform import from_origin
+    from scripts.perka_bnpb_classification import classify_perka_bnpb
+
+    depth_data = np.array(
+        [[0.02, 0.05, 0.10, 0.149], [0.15, 0.50, 0.76, 1.60]],
+        dtype=np.float32,
+    )
+    depth_file = tmp_path / "test_depth_15cm.tif"
+    hazard_file = tmp_path / "hazard_15cm.tif"
+    fhi_file = tmp_path / "fhi_15cm.tif"
+
+    profile = {
+        "driver": "GTiff",
+        "height": 2,
+        "width": 4,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:32747",
+        "transform": from_origin(100, 200, 10, 10),
+        "nodata": np.nan,
+    }
+    with rasterio.open(depth_file, "w", **profile) as dst:
+        dst.write(depth_data, 1)
+
+    # Uses default hmin=0.15m
+    classify_perka_bnpb(depth_raster=depth_file, out_path=hazard_file, out_fhi_path=fhi_file)
+
+    with rasterio.open(hazard_file) as src_h:
+        cls = src_h.read(1)
+        assert src_h.tags().get("hmin") == "0.15"
+    with rasterio.open(fhi_file) as src_f:
+        fhi = src_f.read(1)
+        assert src_f.tags().get("hmin") == "0.15"
+
+    expected_cls = np.array([[0, 0, 0, 0], [1, 1, 2, 3]], dtype=np.uint8)
+    np.testing.assert_array_equal(cls, expected_cls)
+    # Row 0 (< 0.15m) must be strictly NaN in FHI; row 1 (>= 0.15m) must be finite and > 0
+    assert np.all(np.isnan(fhi[0, :])), "Pixels < 0.15m must be removed (NaN) from FloodHazard_Index.tif!"
+    assert np.all(np.isfinite(fhi[1, :]) & (fhi[1, :] > 0.0))
+
+    qml_txt = hazard_file.with_suffix(".qml").read_text(encoding="utf-8")
+    assert "0.15 - 0.76 m" in qml_txt

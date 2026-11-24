@@ -736,14 +736,17 @@ def _apply_cnb_infiltration_to_case(
     case_dir: Path,
     sf: SfincsModel,
     cn_tif: Path,
-    initial_sat_frac: float = 0.50,
+    initial_sat_frac: float = 0.0,
     ks_recovery_mmhr: float = 0.0,
 ) -> None:
     """
     Replaces constant qinf with verified SFINCS v2.4.0+ Curve Number with Recovery (CNB) binary maps:
       - sfincs.smax : Maximum potential soil retention S_max [m] = (1000/CN - 10) * 0.0254
       - sfincs.seff : Initial effective storage capacity [m] = S_max * (1 - initial_sat_frac)
-                      (Note: SFINCS CNB starts with seff available storage; 50% pre-filled => seff = 0.50 * S_max)
+                      Default initial_sat_frac=0.0 (seff = S_max) when `cn_tif` already encodes the
+                      target USDA-NRCS antecedent condition (AMC-II for RP2-RP10 or AMC-III via
+                      cn2_to_cn3 for RP25-RP100), preventing double-counting of wet soil saturation
+                      (USDA-NRCS NEH Part 630; SNI 2415:2016; Deltares SFINCS / EPA SWMM).
       - sfincs.ks   : Recovery hydraulic conductivity [mm/hr] (0.0 during single-event storm)
 
     Explicitly deletes sfincs.qinf, gis/qinf.tif, and sfincs.scs so legacy v2.4.0 scsfile bugs
@@ -993,13 +996,15 @@ def prepare_sfincs_direct_rain_forcing(
         sf.write()
 
         # Infiltration scheme: modern CNB (USDA-NRCS Curve Number with recovery) vs legacy constant qinf
+        # Because cn_amc2_100m.tif (RP2-RP10) and cn_amc3_100m.tif (RP25-RP100, via cn2_to_cn3) ALREADY
+        # encode USDA-NRCS NEH Part 630 / SNI 2415:2016 antecedent moisture (AMC-II vs AMC-III),
+        # initial_sat_frac=0.0 sets seff = S_max(AMC) exactly ONCE without double-counting saturation.
         rp_digits = "".join(ch for ch in str(rp) if ch.isdigit())
         rp_num = int(rp_digits) if rp_digits else 100
         use_amc3 = rp_num >= 25
         cn_path = Path(cn_amc3_tif if use_amc3 else cn_amc2_tif)
         if str(infiltration_mode).lower() == "cnb" and cn_path.exists():
-            init_sat = 0.50 if use_amc3 else 0.25
-            _apply_cnb_infiltration_to_case(case_dir, sf, cn_path, initial_sat_frac=init_sat)
+            _apply_cnb_infiltration_to_case(case_dir, sf, cn_path, initial_sat_frac=0.0)
         else:
             if str(infiltration_mode).lower() == "cnb":
                 print(f"  [NOTE] CN raster {cn_path} not found; retaining constant qinf from base model.")
@@ -1186,7 +1191,7 @@ def _clip_and_mask_raster(
 def refine_flood_hazard_raster(
     depth_tif: str,
     dep_path: Union[str, Path],
-    hmin: float = 0.05,
+    hmin: float = 0.15,
     island_mmu_px: Optional[int] = None,   # Optional pixel override; defaults to island_mmu_ha (0.09 ha = 30m x 30m)
     hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (1.0 ha)
     island_mmu_ha: float = 0.09,           # Resolution-independent 30m x 30m (0.09 ha) minimum flood patch size
@@ -1194,25 +1199,24 @@ def refine_flood_hazard_raster(
     min_hole_ha: float = 0.09,             # Resolution-independent 30m x 30m (0.09 ha = 1 FABDEM pixel) sub-DEM pinhole fill
     bridge_radius: int = 3,    # Circular morphological closing radius (px) across narrow road cuts & bunds
     smooth_sigma: float = 1.0, # Boundary anti-aliasing sigma (px)
-    h_connect: float = 0.10,   # 0.10m core depth threshold for hydraulic connectivity bridging
-    freeboard_m: float = 0.0,  # Optional FABDEM vertical uncertainty margin (Option B v2.0 uses +0.25m)
-    max_ext_dist_m: float = 0.0,      # Max outward WSE edge-recovery distance [m] (Option B v2.0 uses 80.0m)
-    max_ext_slope_deg: float = 5.0,   # Slope ceiling [deg] for natural floodplain uncertainty margin (Option B: 5.0°)
+    h_connect: float = 0.15,   # 0.15m core depth threshold for hydraulic connectivity bridging (aligned with hmin)
+    freeboard_m: float = 0.0,  # Strict deterministic default = 0.0m (no invented water; use only for explicit DEM uncertainty sensitivity envelopes)
+    max_ext_dist_m: float = 0.0,      # Max outward WSE bilinear edge-NaN recovery distance [m] (default 80.0m = 1x dx in postprocess)
+    max_ext_slope_deg: float = 5.0,   # Slope ceiling [deg] if optional uncertainty freeboard sensitivity is enabled
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
     out_display_tif: Optional[str] = None,
-    max_slope_deg: Optional[float] = 8.0, # Prunes unchannelized hillside noise (width <= 30m, slope >= 8 deg) outside RBI rivers
+    max_slope_deg: Optional[float] = 8.0, # Prunes narrow hillslope sheet noise (>= 8 deg, Van Zuidam 1985) outside RBI rivers
     rivers_gpkg: Optional[str] = "data/rivers.gpkg",
 ) -> None:
     """
-    Refines raw downscaled flood depth rasters while strictly respecting hydrostatics (Zs > DEM)
+    Refines raw downscaled flood depth rasters while strictly respecting hydrostatics (Zs - DEM >= hmin)
     and enforcing a 4-connected 30m x 30m (0.09 ha, native FABDEM pixel footprint) minimum feature floor.
 
-    When `max_ext_dist_m > 0` (Option B v2.0 National Standard: `freeboard_m=0.25`, `max_ext_dist_m=80.0`,
-    `max_ext_slope_deg=5.0`), also recovers bilinear edge-NaN margins and applies a conservative,
-    distance-decaying FABDEM vertical uncertainty margin (Hawker et al., 2022) strictly gated to
-    hydrologically connected flat floodplains (< max_ext_slope_deg) so elevated hills and steep slopes stay dry.
+    When `max_ext_dist_m > 0` with `freeboard_m = 0.0` (Strict Scientific Standard: `max_ext_dist_m <= 1.0 * dx`),
+    purely recovers bilinear edge-NaN dropouts where the simulated water surface strictly exceeds terrain
+    by at least `hmin` (default 0.15m / 15 cm), without adding synthetic water elevation or volume.
     """
     depth_p = Path(depth_tif)
     # 1. Preserve raw depth raster (Issue M7)
@@ -1408,18 +1412,19 @@ def refine_flood_hazard_raster(
     else:
         candidate_mask = smooth_mask
 
-    # 5. Strictly Hydrostatic Topographic Depth Reconstruction (Zs - DEM > 0)
-    # Cells where terrain is ABOVE the interpolated water level (+ optional Option B flat-floodplain freeboard)
-    # remain STRICTLY DRY (NaN) so elevated dry hills/mounds/evacuation sites are NEVER drowned!
+    # 5. Strictly Hydrostatic Topographic Depth Reconstruction (Zs - DEM >= hmin)
+    # Cells where terrain is ABOVE the interpolated water level, or where reconstructed depth is
+    # below hmin (default 0.15m / 15 cm minimum flood hazard threshold), remain STRICTLY DRY (NaN)
+    # so shallow pixel noise is never artificially inflated up to hmin!
     if ext_depth_field is not None:
         depth_phys = ext_depth_field
-        # Keep true simulated core depth on raw_wet_mask; smooth tapered depth_ext on connected fringe
-        physically_submerged = np.isfinite(depth_phys) & (depth_phys > 0.0)
+        # Keep true simulated core depth on raw_wet_mask; smooth tapered depth_ext on connected fringe >= hmin
+        physically_submerged = np.isfinite(depth_phys) & (depth_phys >= hmin)
         final_mask = candidate_mask & np.isfinite(dem) & (core_wet_mask | physically_submerged)
         depth_reconstructed = np.where(
             core_wet_mask & final_mask,
-            np.maximum(hmin, raw_depth),
-            np.where(final_mask, np.maximum(hmin, depth_phys), np.nan),
+            raw_depth,
+            np.where(final_mask, depth_phys, np.nan),
         ).astype(np.float32)
     else:
         zs = np.where(raw_wet_mask & np.isfinite(dem), raw_depth + dem, np.nan)
@@ -1431,9 +1436,9 @@ def refine_flood_hazard_raster(
         else:
             depth_phys = np.full_like(dem, np.nan)
 
-        physically_submerged = np.isfinite(depth_phys) & (depth_phys > 0.0)
+        physically_submerged = np.isfinite(depth_phys) & (depth_phys >= hmin)
         final_mask = candidate_mask & np.isfinite(dem) & (raw_wet_mask | physically_submerged)
-        depth_reconstructed = np.where(final_mask, np.maximum(hmin, depth_phys), np.nan).astype(np.float32)
+        depth_reconstructed = np.where(final_mask, depth_phys, np.nan).astype(np.float32)
 
     if smooth_sigma > 0:
         depth_raw_recon = np.where(final_mask, depth_reconstructed, 0.0)
@@ -1447,7 +1452,12 @@ def refine_flood_hazard_raster(
 
     # Calibration scaling (default 1.0 / 0.0; discouraged except for explicit sensitivity experiments)
     calibrated_depth = norm_depth * depth_scale + depth_offset
-    final_depth = np.where(final_mask, np.maximum(hmin, calibrated_depth), np.nan).astype(np.float32)
+    # Strictly remove any pixel below minimum flood disaster depth hmin (never clamp < hmin upward!)
+    final_depth = np.where(
+        final_mask & np.isfinite(calibrated_depth) & (calibrated_depth >= hmin),
+        calibrated_depth,
+        np.nan,
+    ).astype(np.float32)
 
     # 6. Post-Hydrostatic Sub-DEM Pinhole & Scattered Speckle Cleanup (minimum feature floor: 30m x 30m = 0.09 ha)
     # Step 5 terrain intersection can punch tiny sub-pixel pinholes (< 30m x 30m, smaller than 1 native FABDEM pixel)
@@ -1505,7 +1515,7 @@ def refine_flood_hazard_raster(
             island_mmu_px=str(island_mmu_px),
             min_hole_px=str(min_hole_px),
             mmu_scale="1:50000",
-            mmu_standard=f"Peraturan BIG No. 18/2021 / SNI 6502.3:2010 / Perka BNPB No. 02/2012 ({hole_mmu_ha_eff:.2f} ha, floor {min_hole_ha_eff:.2f} ha)",
+            mmu_standard=f"1:50,000 cartographic legibility 2x2mm ({hole_mmu_ha_eff:.2f} ha) & 30m FABDEM floor ({min_hole_ha_eff:.2f} ha); SNI 6502.3:2010 / Peraturan BIG No. 18/2021 sliver cleanup",
             bridge_radius=str(bridge_radius),
             smooth_sigma=str(smooth_sigma),
             h_connect=str(h_connect),
@@ -1549,20 +1559,20 @@ def postprocess_sfincs_hazard(
     output_maps_dir: str = "outputs",
     das_clusters_gpkg: str = "data/das_clusters/sumbar_das_cluster.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
-    hmin: float = 0.05,
-    reproj_method: str = "bilinear",  # Continuous bilinear water level interpolation (removes stair-step ridges)
+    hmin: float = 0.15,                    # 15 cm minimum flood hazard depth (Wing et al., 2018; Sampson et al., 2015; Bates et al., 2021)
+    reproj_method: str = "bilinear",       # Continuous bilinear water level interpolation (removes stair-step ridges)
     island_mmu_px: Optional[int] = None,   # Optional pixel override; defaults to island_mmu_ha (0.09 ha = 30m x 30m)
-    hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (2.0 ha)
-    island_mmu_ha: float = 0.09,           # Resolution-independent 30m x 30m (0.09 ha) minimum flood patch floor
-    hole_mmu_ha: float = 2.0,              # Resolution-independent 2.0 ha enclosed hydrostatic void limit (Option B V3)
-    min_hole_ha: float = 0.09,             # Resolution-independent 30m x 30m (0.09 ha) sub-DEM pinhole fill
-    bridge_radius: int = 6,                # 6 px (60m) circular morphological closing across roads/bunds (80m V3)
-    smooth_sigma: float = 1.2,             # 1.2 px natural boundary anti-aliasing (Option B V3)
-    h_connect: float = 0.10,               # 0.10m core depth threshold for hydraulic connectivity bridging
-    freeboard_m: float = 0.35,             # 80m V3: +0.35m FABDEM uncertainty margin (< 0.50m MAE, Hawker et al., 2022)
-    max_ext_dist_m: float = 120.0,         # 80m V3: 120m (1.5 x dx) hydrologically connected edge recovery
-    max_ext_slope_deg: float = 5.0,        # 80m V3: flat floodplain slope cap (< 5 deg) for freeboard margin
-    max_slope_deg: Optional[float] = 8.0,  # Prunes narrow hillslope sheet noise (RBI river channels always protected)
+    hole_mmu_px: Optional[int] = None,     # Optional pixel override; defaults to hole_mmu_ha (1.0 ha)
+    island_mmu_ha: float = 0.09,           # Native 30m x 30m (0.09 ha = 1 FABDEM pixel) minimum flood patch floor (Hawker et al., 2022)
+    hole_mmu_ha: float = 1.0,              # 1.0 ha (2mm x 2mm @ 1:50,000 legibility) hydrostatic enclosed void limit
+    min_hole_ha: float = 0.09,             # Native 30m x 30m (0.09 ha) sub-DEM pinhole fill
+    bridge_radius: int = 3,                # 3 px (30m) circular morphological closing matching Indonesian road/embankment widths (10-30m)
+    smooth_sigma: float = 1.0,             # 1.0 px Euclidean signed-distance boundary anti-aliasing (Borgefors, 1986)
+    h_connect: float = 0.15,               # 0.15m core depth threshold for hydraulic connectivity bridging (aligned with hmin)
+    freeboard_m: float = 0.0,              # Strict deterministic default = 0.0m (no synthetic water elevation added!)
+    max_ext_dist_m: float = 80.0,          # 80m (1.0 x dx) pure bilinear edge-NaN recovery strictly where Zs - DEM >= hmin (40m on 40m grid)
+    max_ext_slope_deg: float = 5.0,        # Slope ceiling [deg] if optional DEM uncertainty freeboard sensitivity is enabled
+    max_slope_deg: Optional[float] = 8.0,  # Prunes narrow hillslope sheet noise (>= 8 deg, Van Zuidam 1985; RBI rivers always protected)
     depth_offset: float = 0.0,
     depth_scale: float = 1.0,
     cosmetic: bool = False,
@@ -1714,6 +1724,7 @@ def postprocess_sfincs_hazard(
         depth_tif=depth_tif,
         das_geom_gpkg=(das_geom_gpkg if os.path.exists(das_geom_gpkg) else das_clusters_gpkg),
         das_id=das_id,
+        hmin=hmin,
         out_json=str(survey_val_path),
     )
 
@@ -1730,7 +1741,7 @@ def create_sfincs_flood_animation(
     kabkot_gpkg: str = "data/boundary_kabkot.gpkg",
     lake_gpkg: str = "data/lake.gpkg",
     fps: int = 2,
-    hmin: float = 0.05,
+    hmin: float = 0.15,
     vmax: float = 3.0,
 ):
     """

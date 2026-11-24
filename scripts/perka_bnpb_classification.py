@@ -7,7 +7,7 @@ Authoritative disaster hazard classification module according to:
     BNPB, Jakarta (2012).
 
 Hazard Level Thresholds (Physical Depth):
-    - Class 0: Unflooded / Dry (h < hmin, default 0.05m)
+    - Class 0: Unflooded / Dry / Below Minimum Flood Hazard Depth (h < hmin, default 0.15m / 15 cm)
     - Class 1: Rendah (Low Hazard)    -> hmin <= h < 0.76m
     - Class 2: Sedang (Medium Hazard) -> 0.76m <= h <= 1.50m
     - Class 3: Tinggi (High Hazard)   -> h > 1.50m
@@ -82,7 +82,7 @@ def get_fhi_continuous_cmap():
     )
 
 
-def write_perka_hazard_qml(out_qml_path: Union[str, Path]) -> str:
+def write_perka_hazard_qml(out_qml_path: Union[str, Path], hmin: float = 0.15) -> str:
     """
     Writes a standalone QGIS Layer Style file (.qml) for discrete Perka BNPB hazard classes.
     Automatically loaded by QGIS when placed alongside hazard_class_perka2012.tif.
@@ -92,8 +92,8 @@ def write_perka_hazard_qml(out_qml_path: Union[str, Path]) -> str:
   <pipe>
     <rasterrenderer type="paletted" opacity="1" band="1">
       <colorPalette>
-        <paletteEntry value="0" color="#000000" alpha="0" label="Kering / Nodata"/>
-        <paletteEntry value="1" color="{PERKA_COLOR_HEX['Rendah']}" alpha="255" label="Rendah (h &lt; 0.76 m)"/>
+        <paletteEntry value="0" color="#000000" alpha="0" label="Kering / &lt; {hmin:.2f} m / Nodata"/>
+        <paletteEntry value="1" color="{PERKA_COLOR_HEX['Rendah']}" alpha="255" label="Rendah ({hmin:.2f} - 0.76 m)"/>
         <paletteEntry value="2" color="{PERKA_COLOR_HEX['Sedang']}" alpha="255" label="Sedang (0.76 - 1.50 m)"/>
         <paletteEntry value="3" color="{PERKA_COLOR_HEX['Tinggi']}" alpha="255" label="Tinggi (h &gt; 1.50 m)"/>
       </colorPalette>
@@ -174,7 +174,7 @@ def depth_to_fuzzy_threshold(
 
 def classify_depth_array(
     depth: np.ndarray,
-    hmin: float = 0.05,
+    hmin: float = 0.15,
     low_thresh: float = 0.76,
     high_thresh: float = 1.50,
     method: Literal["depth", "fuzzy"] = "depth",
@@ -218,7 +218,7 @@ def classify_perka_bnpb(
     depth_raster: Union[str, Path],
     out_path: Union[str, Path],
     out_fhi_path: Optional[Union[str, Path]] = None,
-    hmin: float = 0.05,
+    hmin: float = 0.15,
     low_thresh: float = 0.76,
     high_thresh: float = 1.50,
     method: Literal["depth", "fuzzy"] = "depth",
@@ -238,7 +238,7 @@ def classify_perka_bnpb(
     out_fhi_path : str or Path, optional
         Path to output continuous Flood Hazard Index GeoTIFF (0.0 to 1.0).
     hmin : float
-        Minimum inundation depth threshold (m), default 0.05m.
+        Minimum inundation depth threshold (m), default 0.15m (15 cm).
     low_thresh : float
         Upper boundary of Low Hazard / lower boundary of Medium Hazard (m), default 0.76m.
     high_thresh : float
@@ -308,8 +308,8 @@ def classify_perka_bnpb(
 
     # Write companion QGIS layer style (.qml)
     qml_hazard_path = out_path.with_suffix(".qml")
-    write_perka_hazard_qml(qml_hazard_path)
-    print(f"[OK] Classified BNPB hazard map ({method} mode) written to: {out_path}")
+    write_perka_hazard_qml(qml_hazard_path, hmin=hmin)
+    print(f"[OK] Classified BNPB hazard map ({method} mode, hmin={hmin:.2f}m) written to: {out_path}")
     print(f"[OK] QGIS layer style written to: {qml_hazard_path}")
 
     # 2. Write Continuous Flood Hazard Index GeoTIFF (float32, 0.0 - 1.0)
@@ -325,12 +325,13 @@ def classify_perka_bnpb(
             nodata=np.nan,
             compress="lzw",
         )
-        fhi_masked = np.where(depth >= hmin, fhi, np.nan).astype(np.float32)
+        fhi_masked = np.where(np.isfinite(depth) & (depth >= hmin), fhi, np.nan).astype(np.float32)
         with rasterio.open(out_fhi_path, "w", **profile_fhi) as dst_fhi:
             dst_fhi.write(fhi_masked, 1)
             dst_fhi.set_band_description(1, "Fuzzy Large Flood Hazard Index (0.0 to 1.0)")
             dst_fhi.update_tags(
-                standard="Perka BNPB No. 02/2012 Fuzzy Large",
+                standard="Fuzzy Large FHI calibrated to Perka BNPB No. 02/2012 depth thresholds",
+                hmin=str(hmin),
                 midpoint=str(midpoint),
                 spread=str(spread),
                 color_ramp="Rendah(#34A853)->Sedang(#FBBC05)->Tinggi(#EA4335)",

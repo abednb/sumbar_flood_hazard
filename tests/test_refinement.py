@@ -150,8 +150,8 @@ def test_nearest_neighbor_hole_infilling(tmp_path):
     dem = np.full(shape, 5.0, dtype=np.float32)
     raw_depth = np.full(shape, 1.5, dtype=np.float32)  # Flooded domain with Zs = 6.5m
 
-    # 1. Shallow enclosed 3x3 void (9 px <= hole_mmu=25) STILL below Zs=6.5m (DEM=6.48m -> depth_phys=0.02m > 0)
-    dem[18:21, 18:21] = 6.48
+    # 1. Shallow enclosed 3x3 void (9 px <= hole_mmu=25) submerged below Zs=6.5m (DEM=6.30m -> depth_phys=0.20m >= hmin)
+    dem[18:21, 18:21] = 6.30
     raw_depth[18:21, 18:21] = 0.0
 
     # 2. Small elevated dry mound (3x3 = 9 px <= hole_mmu=25) ABOVE Zs=6.5m (DEM=8.5m > Zs=6.5m -> MUST STAY DRY!)
@@ -216,7 +216,7 @@ def test_resolution_independent_hectare_mmu_on_20m_grid(tmp_path):
     dem = np.full(shape, 5.0, dtype=np.float32)
     raw_depth = np.full(shape, 1.5, dtype=np.float32)
     # Enclosed 4x4 submerged void (16 px * 400 m2 = 0.64 ha <= 1.0 ha -> filled)
-    dem[10:14, 10:14] = 6.48
+    dem[10:14, 10:14] = 6.30
     raw_depth[10:14, 10:14] = 0.0
 
     dem_path = tmp_path / "dem_20m.tif"
@@ -314,5 +314,61 @@ def test_30x30m_minimum_hole_and_scattered_pixel_floor(tmp_path):
     assert np.all(np.isfinite(out[10:12, 10:12])), "Sub-30x30m pinhole (4 px) should be filled!"
     assert np.all(np.isnan(out[22:25, 10:13])), "30x30m elevated dry mound (9 px) must remain strictly dry!"
     assert np.all(np.isnan(out[15:17, 32:34])), "Sub-30x30m scattered wet speck (4 px) must be pruned!"
+
+
+def test_15cm_minimum_depth_strictly_removed_not_inflated(tmp_path):
+    """
+    Verify default hmin=0.15m (15 cm) removes all sub-15cm depths from refined Flood_Depth.tif
+    and NEVER artificially clamps shallow 0.02m-0.14m pixels upward to 0.15m.
+    """
+    shape = (40, 40)
+    dem = np.full(shape, 5.0, dtype=np.float32)
+    raw_depth = np.zeros(shape, dtype=np.float32)
+
+    # Deep core flood zone (left half): 1.20m depth (retained)
+    raw_depth[:, :20] = 1.20
+    # Shallow nuisance sheet-flow strip (cols 20..29): 0.10m depth (< 0.15m -> must be removed!)
+    raw_depth[:, 20:30] = 0.10
+    # Elevated terrace inside deep core where Zs(6.20) - DEM(6.10) = 0.10m < 0.15m (must NOT inflate to 0.15m!)
+    dem[15:19, 8:12] = 6.10
+    raw_depth[15:19, 8:12] = 0.10
+
+    dem_path = tmp_path / "dem_15cm.tif"
+    depth_path = tmp_path / "depth_15cm.tif"
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "nodata": np.nan,
+        "width": 40,
+        "height": 40,
+        "count": 1,
+        "crs": "EPSG:32747",
+        "transform": rasterio.transform.from_bounds(0, 0, 400, 400, 40, 40),
+    }
+    with rasterio.open(dem_path, "w", **profile) as dst:
+        dst.write(dem, 1)
+    with rasterio.open(depth_path, "w", **profile) as dst:
+        dst.write(raw_depth, 1)
+
+    refine_flood_hazard_raster(
+        depth_tif=str(depth_path),
+        dep_path=dem_path,
+        # Uses default hmin=0.15m!
+        bridge_radius=2,
+        smooth_sigma=0.5,
+        rivers_gpkg=None,
+    )
+
+    with rasterio.open(depth_path) as dst:
+        out = dst.read(1)
+        assert dst.tags().get("hmin") == "0.15"
+
+    valid = out[np.isfinite(out)]
+    assert valid.size > 0
+    assert float(valid.min()) >= 0.15 - 1e-6, f"Found pixel below 0.15m: {valid.min()}"
+    # Shallow 10 cm sheet-flow strip must be completely removed (NaN)
+    assert np.all(np.isnan(out[:, 22:30])), "Sub-15cm sheet-flow strip was not removed!"
+    # 10 cm submerged terrace (4x4 = 16 px >= 9 px floor) must remain NaN, never boosted to 0.15m!
+    assert np.all(np.isnan(out[15:19, 8:12])), "Sub-15cm terrace was artificially inflated to 0.15m!"
 
 
